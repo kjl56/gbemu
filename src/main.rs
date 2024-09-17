@@ -96,6 +96,10 @@ enum Instruction {
   PUSH(StackTarget),
   POP(StackTarget),
 
+  INC(IncDecTarget),
+
+  RLC(PrefixTarget),
+
   CALL(JumpTest),
   RET(JumpTest),
 
@@ -131,6 +135,18 @@ enum ArithmeticTarget {
   A, B, C, D, E, H, L,
 }
 
+enum PrefixTarget {
+  B,
+}
+
+enum StackTarget {
+  BC, DE, HL
+}
+
+enum IncDecTarget {
+  BC, DE, HL
+}
+
 enum LoadByteTarget {
   A, B, C, D, E, H, L, HLI
 }
@@ -158,6 +174,14 @@ impl CPU {
     };
 
     self.pc = next_pc;
+  }
+
+  fn read_next_byte() -> u8 {
+    0
+  }
+
+  fn read_next_word() -> u16 {
+    0
   }
 
   fn execute(&mut self, instruction: Instruction) -> u16{
@@ -191,7 +215,7 @@ impl CPU {
           LoadType::Byte(target, source) => {
             let source_value = match source {
               LoadByteSource::A => self.registers.a,
-              LoadByteSource::D8 => self.read_next_byte(),
+              LoadByteSource::D8 => CPU::read_next_byte(),
               LoadByteSource::HLI => self.bus.read_byte(self.registers.get_hl()),
               _ => { panic!("todo: implement other sources") }
             };
@@ -299,7 +323,7 @@ impl CPU {
     let next_pc = self.pc.wrapping_add(3);
     if should_jump {
       self.push(next_pc);
-      self.read_next_word()
+      CPU::read_next_word()
     } else {
       next_pc
     }
@@ -328,7 +352,8 @@ struct CPU {
 }
 
 struct MemoryBus {
-  memory: [u8; 0xFFFF]
+  memory: [u8; 0xFFFF],
+  gpu: GPU,
 }
 
 impl MemoryBus {
@@ -336,17 +361,17 @@ impl MemoryBus {
     //self.memory[address as usize]
     let address = address as usize;
     match address {
-      VRAM_BEGIN ... VRAM_END => {
+      VRAM_BEGIN ..= VRAM_END => {
         self.gpu.read_vram(address - VRAM_BEGIN)
       }
       _ => panic!("TODO: support other areas of memory")
     }
   }
 
-  fn write_byte(&self, address: u16, value: u8) {
+  fn write_byte(&mut self, address: u16, value: u8) {
     let address = address as usize;
     match address {
-      VRAM_BEGIN ... VRAM_END => {
+      VRAM_BEGIN ..= VRAM_END => {
         self.gpu.write_vram(address - VRAM_BEGIN, value)
       }
       _ => panic!("TODO: support other areas of memory")
