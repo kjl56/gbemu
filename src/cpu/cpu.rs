@@ -1,6 +1,6 @@
 
 use crate::cpu::registers;
-use crate::cpu::instructions::{Instruction, ArithmeticTarget, PrefixTarget, StackTarget, IncDecTarget, LoadType, LoadByteTarget, LoadByteSource, JumpTest};
+use crate::cpu::instructions::{Instruction, ArithmeticTarget, ArithmeticSource, RotateTarget, StackTarget, IncDecTarget, LoadType, LoadByteTarget, LoadByteSource, JumpTest, JumpTarget};
 use crate::memory::membus;
 
 pub struct CPU {
@@ -63,19 +63,20 @@ impl CPU {
     if self.is_halted {
       return 0x0
     }
+    println!("{:?}", instruction);
     match instruction {
-      Instruction::ADD(target) => {
+      Instruction::ADD(target, source) => {
         match target {
-          ArithmeticTarget::C => {
+          /*ArithmeticTarget::C => {
             let value = self.registers.c;
             let new_value = self.add(value);
             self.registers.a = new_value;
             self.pc.wrapping_add(1)
-          }
+          }*/
           _ => {/*todo: support more targets*/ self.pc}
         }      
       }
-      Instruction::JP(test) => {
+      Instruction::JP(test, target) => {
         let jump_condition = match test {
           JumpTest::NotZero => !self.registers.f.zero,
           JumpTest::NotCarry => !self.registers.f.carry,
@@ -124,7 +125,7 @@ impl CPU {
         };
         self.pc.wrapping_add(1)
       }
-      Instruction::CALL(test) => {
+      Instruction::CALL(test, target) => {
         let jump_condition = match test {
           JumpTest::NotZero => !self.registers.f.zero,
           _ => { panic!("todo: support more conditions") }
@@ -145,7 +146,7 @@ impl CPU {
         self.is_halted = true;
         self.pc.wrapping_add(1)
       }
-      _ => { panic!("todo: support more instructions") }
+      _ => { panic!("todo: Instruction: {:?} not yet implemented", instruction) }
     }
   }
 
