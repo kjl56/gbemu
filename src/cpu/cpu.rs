@@ -1,6 +1,6 @@
 
 use crate::cpu::registers;
-use crate::cpu::instructions::{Instruction, ArithmeticTarget, ArithmeticSource, RotateTarget, StackTarget, IncDecTarget, LoadType, LoadByteTarget, LoadByteSource, JumpTest, JumpTarget};
+use crate::cpu::instructions::{Instruction, ArithmeticTarget, ArithmeticSource, RotateTarget, StackTarget, IncDecTarget, LoadType, LoadTarget, LoadSource, JumpTest, JumpTarget};
 use crate::memory::membus;
 
 pub struct CPU {
@@ -51,12 +51,16 @@ impl CPU {
     self.pc = next_pc;
   }
 
-  fn read_next_byte() -> u8 {
-    0
+  fn read_next_byte(&self) -> u8 {
+    self.bus.read_byte(self.pc + 1) as u8
   }
 
-  fn read_next_word() -> u16 {
-    0
+  fn read_next_word(&self) -> u16 {
+    //Gameboy is little endian so read pc + 2 as most significant bit
+    //and pc + 1 as least significant bit
+    let least_significant_byte = self.bus.read_byte(self.pc + 1) as u16;
+    let most_significant_byte = self.bus.read_byte(self.pc + 2) as u16;
+    (most_significant_byte << 8) | least_significant_byte
   }
 
   fn execute(&mut self, instruction: Instruction) -> u16{
@@ -90,23 +94,116 @@ impl CPU {
         match load_type {
           LoadType::Byte(target, source) => {
             let source_value = match source {
-              LoadByteSource::A => self.registers.a,
-              LoadByteSource::D8 => CPU::read_next_byte(),
-              LoadByteSource::HLI => self.bus.read_byte(self.registers.get_hl()),
-              _ => { panic!("todo: implement other sources") }
+              LoadSource::A => self.registers.a,
+              LoadSource::B => self.registers.b,
+              LoadSource::C => self.registers.c,
+              LoadSource::D => self.registers.d,
+              LoadSource::E => self.registers.e,
+              LoadSource::H => self.registers.h,
+              LoadSource::L => self.registers.l,
+              LoadSource::D8 => self.read_next_byte(),
+              _ => { panic!("incorrect opcode mapping for LD") }
             };
             match target {
-              LoadByteTarget::A => self.registers.a = source_value,
-              LoadByteTarget::HLI => self.bus.write_byte(self.registers.get_hl(), source_value),
-              _ => { panic!("todo: implement other targets") }
+              LoadTarget::A => self.registers.a = source_value,
+              LoadTarget::B => self.registers.b = source_value,
+              LoadTarget::C => self.registers.c = source_value,
+              LoadTarget::D => self.registers.d = source_value,
+              LoadTarget::E => self.registers.e = source_value,
+              LoadTarget::H => self.registers.h = source_value,
+              LoadTarget::L => self.registers.l = source_value,
+              LoadTarget::BC => self.bus.write_byte(self.registers.get_bc(), source_value),
+              LoadTarget::DE => self.bus.write_byte(self.registers.get_de(), source_value),
+              LoadTarget::HL => self.bus.write_byte(self.registers.get_hl(), source_value),
+              _ => { panic!("incorrect opcode mapping for LD") }
             };
             match source {
-              LoadByteSource::D8 => self.pc.wrapping_add(2),
+              LoadSource::D8 => self.pc.wrapping_add(2),
+              _                  => self.pc.wrapping_add(1),
+            }
+          }
+          LoadType::Word(target, source) => {
+            let source_value = match source {
+              LoadSource::D16 => self.read_next_word(),
+              LoadSource::SP => self.sp,
+              LoadSource::SP8 => self.sp.wrapping_add_signed((self.read_next_byte() as i8).into()),
+              LoadSource::HL => self.registers.get_hl(),
+              _ => { panic!("incorrect opcode mapping for LD") }
+            };
+            match target {
+              LoadTarget::A => self.registers.a = self.bus.read_byte(source_value),
+              LoadTarget::BC => self.registers.set_bc(source_value),
+              LoadTarget::DE => self.registers.set_de(source_value),
+              LoadTarget::HL => self.registers.set_hl(source_value),
+              LoadTarget::D16 => {let addressd16 = self.read_next_word(); self.bus.write_byte(addressd16, (source_value & 0xFF) as u8); self.bus.write_byte(addressd16+1, ((source_value & 0xFF00) >> 8) as u8)},
+              LoadTarget::SP => self.sp = source_value,
+              _ => { panic!("incorrect opcode mapping for LD") }
+            };
+            match source {
+              LoadSource::D16 => self.pc.wrapping_add(3),
+              LoadSource::SP => self.pc.wrapping_add(3),
+              LoadSource::SP8 => self.pc.wrapping_add(2),
+              _                  => self.pc.wrapping_add(1),
+            }
+          }
+          LoadType::AToAddress(target, source) => {
+            let source_value = match source {
+              LoadSource::A => self.registers.a,
+              LoadSource::B => self.registers.b,
+              LoadSource::C => self.registers.c,
+              LoadSource::D => self.registers.d,
+              LoadSource::E => self.registers.e,
+              LoadSource::H => self.registers.h,
+              LoadSource::L => self.registers.l,
+              LoadSource::D8 => self.read_next_byte(),
+              _ => { panic!("incorrect opcode mapping for LD") }
+            };
+            match target {
+              LoadTarget::BC => self.bus.write_byte(self.registers.get_bc(), source_value),
+              LoadTarget::DE => self.bus.write_byte(self.registers.get_de(), source_value),
+              LoadTarget::HL => self.bus.write_byte(self.registers.get_hl(), source_value),
+              LoadTarget::D16 => self.bus.write_byte(self.read_next_word(), source_value),
+              LoadTarget::HLI => {self.bus.write_byte(self.registers.get_hl(), source_value); self.registers.set_hl(self.registers.get_hl() + 1)},
+              LoadTarget::HLD => {self.bus.write_byte(self.registers.get_hl(), source_value); self.registers.set_hl(self.registers.get_hl() - 1)},
+              LoadTarget::AddrPC => self.bus.write_byte(0xFF00 + (self.registers.c as u16), source_value),
+              _ => { panic!("incorrect opcode mapping for LD") }
+            };
+            match target {
+              LoadTarget::D16 => self.pc.wrapping_add(3),
+              _ =>  match source {
+                      LoadSource::D8 => self.pc.wrapping_add(2),
+                      _                  => self.pc.wrapping_add(1),
+                    },
+            }
+          }
+          LoadType::AddressToA(target, source) => {
+            let source_value = match source {
+              LoadSource::D16 => self.read_next_word(),
+              LoadSource::BC => self.registers.get_bc(),
+              LoadSource::DE => self.registers.get_de(),
+              LoadSource::HL => self.registers.get_hl(),
+              LoadSource::HLI => {let val = self.registers.get_hl(); self.registers.set_hl(val + 1); val},
+              LoadSource::HLD => {let val = self.registers.get_hl(); self.registers.set_hl(val - 1); val},
+              LoadSource::AddrPC => 0xFF00 + (self.registers.c as u16),
+              _ => { panic!("incorrect opcode mapping for LD") }
+            };
+            match target {
+              LoadTarget::A => self.registers.a = self.bus.read_byte(source_value),
+              LoadTarget::B => self.registers.b = self.bus.read_byte(source_value),
+              LoadTarget::C => self.registers.c = self.bus.read_byte(source_value),
+              LoadTarget::D => self.registers.d = self.bus.read_byte(source_value),
+              LoadTarget::E => self.registers.e = self.bus.read_byte(source_value),
+              LoadTarget::H => self.registers.h = self.bus.read_byte(source_value),
+              LoadTarget::L => self.registers.l = self.bus.read_byte(source_value),
+              _ => { panic!("incorrect opcode mapping for LD") }
+            };
+            match source {
+              LoadSource::D16 => self.pc.wrapping_add(3),
               _                  => self.pc.wrapping_add(1),
             }
           }
           //some other load types: Word, AFromIndirect, IndirectFromA, AFromByteAddress, ByteAddressFromA
-          _ => { panic!("todo: implement other load types") }
+          //_ => { panic!("todo: implement other load types") }
         }
       }
       Instruction::PUSH(target) => {
@@ -146,6 +243,37 @@ impl CPU {
         self.is_halted = true;
         self.pc.wrapping_add(1)
       }
+      Instruction::XOR(target, source) => {
+        match source {
+          ArithmeticSource::HL => {
+            let value = self.bus.read_byte(self.registers.get_hl());
+            self.registers.a = self.registers.a ^ value;
+            if self.registers.a == 0 { self.registers.f.zero = true } else { self.registers.f.zero = false }
+            self.pc.wrapping_add(1)
+          }
+          ArithmeticSource::D8 => {
+            let value = self.read_next_byte();
+            self.registers.a = self.registers.a ^ value;
+            if self.registers.a == 0 { self.registers.f.zero = true } else { self.registers.f.zero = false }
+            self.pc.wrapping_add(2)
+          }
+          _ => {
+            let value = match source {
+              ArithmeticSource::A => self.registers.a,
+              ArithmeticSource::B => self.registers.b,
+              ArithmeticSource::C => self.registers.c,
+              ArithmeticSource::D => self.registers.d,
+              ArithmeticSource::E => self.registers.e,
+              ArithmeticSource::H => self.registers.h,
+              ArithmeticSource::L => self.registers.l,
+              _ => panic!("not a valid XOR instruction")
+            };
+            self.registers.a = self.registers.a ^ value;
+            if self.registers.a == 0 { self.registers.f.zero = true } else { self.registers.f.zero = false }
+            self.pc.wrapping_add(1)
+          }
+        }
+      }
       _ => { panic!("todo: Instruction: {:?} not yet implemented", instruction) }
     }
   }
@@ -164,11 +292,7 @@ impl CPU {
 
   fn jump(&self, should_jump: bool) -> u16 {
     if should_jump {
-      //Gameboy is little endian so read pc + 2 as most significant bit
-      //and pc + 1 as least significant bit
-      let least_significant_byte = self.bus.read_byte(self.pc + 1) as u16;
-      let most_significant_byte = self.bus.read_byte(self.pc + 2) as u16;
-      (most_significant_byte << 8) | least_significant_byte
+      self.read_next_word()
     } else {
       //if we dont jump we need to still move the program
       //counter forward by 3 since the jump instruction is
@@ -199,7 +323,7 @@ impl CPU {
     let next_pc = self.pc.wrapping_add(3);
     if should_jump {
       self.push(next_pc);
-      CPU::read_next_word()
+      self.read_next_word()
     } else {
       next_pc
     }
