@@ -16,7 +16,7 @@ pub enum StackTarget {
 }
 #[derive(Debug)]
 pub enum IncDecTarget {
-  A, B, C, D, E, H, L, BC, DE, HL, SP
+  A, B, C, D, E, H, L, BC, DE, HL, PntrHL, SP
 }
 #[derive(Debug)]
 pub enum LoadTarget {

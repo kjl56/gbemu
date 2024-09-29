@@ -90,6 +90,15 @@ impl CPU {
         };
         self.jump(jump_condition)
       }
+      Instruction::JR(test, target) => {
+        match test {
+          JumpTest::Always => {self.pc.wrapping_add(2); self.pc.wrapping_add_signed((self.read_next_byte() as i8).into())},
+          JumpTest::NotZero => {if self.registers.f.zero == false {self.pc.wrapping_add_signed((self.read_next_byte() as i8).into());} self.pc.wrapping_add(2)},
+          JumpTest::Zero => {if self.registers.f.zero == true {self.pc.wrapping_add_signed((self.read_next_byte() as i8).into());} self.pc.wrapping_add(2)},
+          JumpTest::NotCarry => {if self.registers.f.zero == false {self.pc.wrapping_add_signed((self.read_next_byte() as i8).into());} self.pc.wrapping_add(2)},
+          JumpTest::Carry => {if self.registers.f.zero == true {self.pc.wrapping_add_signed((self.read_next_byte() as i8).into());} self.pc.wrapping_add(2)},
+        }
+      }
       Instruction::LD(load_type) => {
         match load_type {
           LoadType::Byte(target, source) => {
@@ -220,6 +229,52 @@ impl CPU {
           StackTarget::BC => self.registers.set_bc(result),
           _ => { panic!("todo: support more targets") }
         };
+        self.pc.wrapping_add(1)
+      }
+      Instruction::INC(target) => {
+        fn increment_register(register: &mut u8, flags: &mut registers::FlagsRegister) {
+          *register = register.wrapping_add(1);
+          flags.zero = *register == 0;
+          flags.subtract = false;
+          flags.half_carry = (*register & 0xF) + (1 & 0xF) > 0xF;
+        }
+        match target {
+          IncDecTarget::A => increment_register(&mut self.registers.a, &mut self.registers.f),
+          IncDecTarget::B => increment_register(&mut self.registers.b, &mut self.registers.f),
+          IncDecTarget::C => increment_register(&mut self.registers.c, &mut self.registers.f),
+          IncDecTarget::D => increment_register(&mut self.registers.d, &mut self.registers.f),
+          IncDecTarget::E => increment_register(&mut self.registers.e, &mut self.registers.f),
+          IncDecTarget::H => increment_register(&mut self.registers.h, &mut self.registers.f),
+          IncDecTarget::L => increment_register(&mut self.registers.l, &mut self.registers.f),
+          IncDecTarget::BC => self.registers.set_bc(self.registers.get_bc()+1),
+          IncDecTarget::DE => self.registers.set_de(self.registers.get_de()+1),
+          IncDecTarget::HL => self.registers.set_hl(self.registers.get_hl()+1),
+          IncDecTarget::PntrHL => {let mut deref = self.bus.read_byte(self.registers.get_hl()); increment_register(&mut deref, &mut self.registers.f); self.bus.write_byte(self.registers.get_hl(), deref)},
+          IncDecTarget::SP => self.sp = self.sp.wrapping_add(1),
+        }
+        self.pc.wrapping_add(1)
+      }
+    Instruction::DEC(target) => {
+        fn decrement_register(register: &mut u8, flags: &mut registers::FlagsRegister) {
+          *register = register.wrapping_sub(1);
+          flags.zero = *register == 0;
+          flags.subtract = true;
+          flags.half_carry = (*register & 0xF) + (1 & 0xF) > 0xF;
+        }
+        match target {
+          IncDecTarget::A => decrement_register(&mut self.registers.a, &mut self.registers.f),
+          IncDecTarget::B => decrement_register(&mut self.registers.b, &mut self.registers.f),
+          IncDecTarget::C => decrement_register(&mut self.registers.c, &mut self.registers.f),
+          IncDecTarget::D => decrement_register(&mut self.registers.d, &mut self.registers.f),
+          IncDecTarget::E => decrement_register(&mut self.registers.e, &mut self.registers.f),
+          IncDecTarget::H => decrement_register(&mut self.registers.h, &mut self.registers.f),
+          IncDecTarget::L => decrement_register(&mut self.registers.l, &mut self.registers.f),
+          IncDecTarget::BC => self.registers.set_bc(self.registers.get_bc()-1),
+          IncDecTarget::DE => self.registers.set_de(self.registers.get_de()-1),
+          IncDecTarget::HL => self.registers.set_hl(self.registers.get_hl()-1),
+          IncDecTarget::PntrHL => {let mut deref = self.bus.read_byte(self.registers.get_hl()); decrement_register(&mut deref, &mut self.registers.f); self.bus.write_byte(self.registers.get_hl(), deref)},
+          IncDecTarget::SP => self.sp = self.sp.wrapping_sub(1),
+        }
         self.pc.wrapping_add(1)
       }
       Instruction::CALL(test, target) => {
