@@ -41,18 +41,6 @@ impl CPU {
   }
 
   pub fn step(&mut self) {
-    let mut instruction_byte = self.bus.read_byte(self.pc);
-    let prefixed = instruction_byte == 0xCB;
-    if prefixed {
-      instruction_byte = self.bus.read_byte(self.pc + 1);
-    }
-    let next_pc = if let Some(instruction) = Instruction::from_byte(instruction_byte, prefixed) {
-      self.execute(instruction)
-    } else {
-      let description = format!("0x{}{:x}", if prefixed {"cb"} else {""}, instruction_byte);
-      panic!("Unknown instruction found for: {}", description);
-    };
-
     if self.pc != 0x0 {
       let cpustate = format!(
           "A:{:02X?} F:{:02X?} B:{:02X?} C:{:02X?} D:{:02X?} E:{:02X?} H:{:02X?} L:{:02X?} SP:{:04X?} PC:{:04X?} PCMEM:{:02X?},{:02X?},{:02X?},{:02X?}",
@@ -73,6 +61,18 @@ impl CPU {
       );
       writeln!(self.logfile, "{}", cpustate);
     }
+    let mut instruction_byte = self.bus.read_byte(self.pc);
+    let prefixed = instruction_byte == 0xCB;
+    if prefixed {
+      instruction_byte = self.bus.read_byte(self.pc + 1);
+    }
+    let next_pc = if let Some(instruction) = Instruction::from_byte(instruction_byte, prefixed) {
+      self.execute(instruction)
+    } else {
+      let description = format!("0x{}{:x}", if prefixed {"cb"} else {""}, instruction_byte);
+      panic!("Unknown instruction found for: {}", description);
+    };
+
     self.pc = next_pc;
   }
 
@@ -106,23 +106,36 @@ impl CPU {
         }      
       }
       Instruction::JP(test, target) => {
-        let jump_condition = match test {
+        let should_jump = match test {
           JumpTest::NotZero => !self.registers.f.zero,
           JumpTest::NotCarry => !self.registers.f.carry,
           JumpTest::Zero => self.registers.f.zero,
           JumpTest::Carry => self.registers.f.carry,
-          JumpTest::Always => true
+          JumpTest::Always => true,
         };
-        self.jump(jump_condition)
+        if should_jump {
+          match target {
+            JumpTarget::HL => self.registers.get_hl(),
+            JumpTarget::D16 => self.read_next_word(),
+            _ => panic!("invalid target for JP operation")
+          }
+        } else {
+          self.pc.wrapping_add(3)
+        }
       }
       Instruction::JR(test, target) => {
-        match test {
-          JumpTest::Always => {self.pc.wrapping_add(2); self.pc.wrapping_add_signed((self.read_next_byte() as i8).into())},
-          JumpTest::NotZero => {if self.registers.f.zero == false {self.pc.wrapping_add_signed((self.read_next_byte() as i8).into());} self.pc.wrapping_add(2)},
-          JumpTest::Zero => {if self.registers.f.zero == true {self.pc.wrapping_add_signed((self.read_next_byte() as i8).into());} self.pc.wrapping_add(2)},
-          JumpTest::NotCarry => {if self.registers.f.zero == false {self.pc.wrapping_add_signed((self.read_next_byte() as i8).into());} self.pc.wrapping_add(2)},
-          JumpTest::Carry => {if self.registers.f.zero == true {self.pc.wrapping_add_signed((self.read_next_byte() as i8).into());} self.pc.wrapping_add(2)},
+        let should_jump = match test {
+          JumpTest::Always => true,
+          JumpTest::NotZero => !self.registers.f.zero,
+          JumpTest::Zero => self.registers.f.zero,
+          JumpTest::NotCarry => !self.registers.f.carry,
+          JumpTest::Carry => self.registers.f.carry,
+        };
+        let mut next_pc = self.pc.wrapping_add(2);
+        if should_jump {
+          next_pc = next_pc.wrapping_add_signed((self.read_next_byte() as i8).into());
         }
+        next_pc
       }
       Instruction::LD(load_type) => {
         match load_type {
@@ -258,10 +271,11 @@ impl CPU {
       }
       Instruction::INC(target) => {
         fn increment_register(register: &mut u8, flags: &mut registers::FlagsRegister) {
+          let before = *register;  // Store the value before the increment
           *register = register.wrapping_add(1);
           flags.zero = *register == 0;
           flags.subtract = false;
-          flags.half_carry = (*register & 0xF) + (1 & 0xF) > 0xF;
+          flags.half_carry = (before & 0xF) + (1 & 0xF) > 0xF;
         }
         match target {
           IncDecTarget::A => increment_register(&mut self.registers.a, &mut self.registers.f),
@@ -368,17 +382,6 @@ impl CPU {
     //then the addition caused a carry from the lower nibble to the upper nibble.
     self.registers.f.half_carry = (self.registers.a & 0xF) + (value & 0xF) > 0xF;
     new_value
-  }
-
-  fn jump(&self, should_jump: bool) -> u16 {
-    if should_jump {
-      self.read_next_word()
-    } else {
-      //if we dont jump we need to still move the program
-      //counter forward by 3 since the jump instruction is
-      //3 bytes wide (1 byte for tag and 2 bytes for jump address)
-      self.pc.wrapping_add(3)
-    }
   }
 
   fn push(&mut self, value: u16) {
