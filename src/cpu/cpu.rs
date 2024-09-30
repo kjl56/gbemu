@@ -1,4 +1,7 @@
 
+use std::fs;
+use std::io::Write;
+
 use crate::cpu::registers;
 use crate::cpu::instructions::{Instruction, ArithmeticTarget, ArithmeticSource, RotateTarget, StackTarget, IncDecTarget, LoadType, LoadTarget, LoadSource, JumpTest, JumpTarget};
 use crate::memory::membus;
@@ -9,6 +12,7 @@ pub struct CPU {
   sp: u16,
   pub bus: membus::MemoryBus,
   is_halted: bool,
+  logfile: fs::File,
 }
 
 impl CPU {
@@ -32,6 +36,7 @@ impl CPU {
       sp: 0xFFFE,
       bus: membus::MemoryBus::new(),
       is_halted: false,
+      logfile: fs::File::options().write(true).open("doctorlog.txt").unwrap(),
     }
   }
 
@@ -48,6 +53,26 @@ impl CPU {
       panic!("Unknown instruction found for: {}", description);
     };
 
+    if self.pc != 0x0 {
+      let cpustate = format!(
+          "A:{:02X?} F:{:02X?} B:{:02X?} C:{:02X?} D:{:02X?} E:{:02X?} H:{:02X?} L:{:02X?} SP:{:04X?} PC:{:04X?} PCMEM:{:02X?},{:02X?},{:02X?},{:02X?}",
+          self.registers.a,
+          u8::from(&self.registers.f),
+          self.registers.b,
+          self.registers.c,
+          self.registers.d,
+          self.registers.e,
+          self.registers.h,
+          self.registers.l,
+          self.sp,
+          self.pc,
+          self.bus.read_byte(self.pc),
+          self.bus.read_byte(self.pc + 1),
+          self.bus.read_byte(self.pc + 2),
+          self.bus.read_byte(self.pc + 3)
+      );
+      writeln!(self.logfile, "{}", cpustate);
+    }
     self.pc = next_pc;
   }
 

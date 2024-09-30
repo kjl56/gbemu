@@ -57,6 +57,7 @@ impl MemoryBus {
       ECHORAM_BEGIN ..= ECHORAM_END => {self.memory[address - 0x2000]} //mirror of wram (address - 0x2000)
       OAM_BEGIN ..= OAM_END => {self.memory[address]}
       BLOCKED_RAM_BEGIN ..= BLOCKED_RAM_END => {if self.oam_blocked {0xFF} else {0x00}} //behavior depends on hardware revision (DMG behavior implemented here, minus corruption)
+      0xFF44 => {0x90} //used for gameboy doctor
       IO_REGISTERS_BEGIN ..= IO_REGISTERS_END => {self.memory[address]} //replace later like with vram, not all i/o is both readable and writeable
       HRAM_BEGIN ..= HRAM_END => {self.memory[address]}
       INTERRUPT_REGISTER => {self.memory[address]}
