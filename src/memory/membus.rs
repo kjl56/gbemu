@@ -27,7 +27,7 @@ const HRAM_END: usize = 0xFFFE;
 const INTERRUPT_REGISTER: usize = 0xFFFF;
 
 pub struct MemoryBus {
-  pub memory: [u8; 0xFFFF],
+  pub memory: [u8; 0x10000],
   pub gpu: gpu::GPU,
   pub oam_blocked: bool,
   pub eram_blocked: bool,
@@ -36,7 +36,7 @@ pub struct MemoryBus {
 impl MemoryBus {
   pub fn new() -> MemoryBus {
     MemoryBus {
-      memory: [0; 0xFFFF],
+      memory: [0; 0x10000],
       gpu: gpu::GPU::new(),
       eram_blocked: true,
       oam_blocked: false,

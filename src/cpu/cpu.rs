@@ -10,6 +10,7 @@ pub struct CPU {
   registers: registers::Registers,
   pc: u16,
   sp: u16,
+  ime: bool,
   pub bus: membus::MemoryBus,
   is_halted: bool,
   logfile: fs::File,
@@ -34,9 +35,10 @@ impl CPU {
         l: 0x4D,},
       pc: 0x0100,
       sp: 0xFFFE,
+      ime: false,
       bus: membus::MemoryBus::new(),
       is_halted: false,
-      logfile: fs::File::options().write(true).open("doctorlog.txt").unwrap(),
+      logfile: fs::File::options().write(true).create(true).open("doctorlog.txt").unwrap(),
     }
   }
 
@@ -253,10 +255,24 @@ impl CPU {
           //_ => { panic!("todo: implement other load types") }
         }
       }
+      Instruction::LDH(load_type) => {
+        match load_type {
+          LoadType::Byte(target, source) => {
+            match target {
+              LoadTarget::D8 => {self.bus.write_byte(0xFF00 + (self.read_next_byte() as u16), self.registers.a); self.pc.wrapping_add(2)},
+              LoadTarget::A => {self.registers.a = self.bus.read_byte(0xFF00 + (self.read_next_byte() as u16)); self.pc.wrapping_add(2)},
+              _ => { panic!("incorrect opcode mapping for LDH") }
+            }
+          }
+          _ => { panic!("incorrect opcode mapping for LDH") }
+        }
+      }
       Instruction::PUSH(target) => {
         let value = match target {
           StackTarget::BC => self.registers.get_bc(),
-          _ => { panic!("todo: support more targets") }
+          StackTarget::DE => self.registers.get_de(),
+          StackTarget::HL => self.registers.get_hl(),
+          StackTarget::AF => self.registers.get_af(),
         };
         self.push(value);
         self.pc.wrapping_add(1)
@@ -265,7 +281,9 @@ impl CPU {
         let result = self.pop();
         match target {
           StackTarget::BC => self.registers.set_bc(result),
-          _ => { panic!("todo: support more targets") }
+          StackTarget::DE => self.registers.set_de(result),
+          StackTarget::HL => self.registers.set_hl(result),
+          StackTarget::AF => self.registers.set_af(result),
         };
         self.pc.wrapping_add(1)
       }
@@ -293,7 +311,7 @@ impl CPU {
         }
         self.pc.wrapping_add(1)
       }
-    Instruction::DEC(target) => {
+      Instruction::DEC(target) => {
         fn decrement_register(register: &mut u8, flags: &mut registers::FlagsRegister) {
           *register = register.wrapping_sub(1);
           flags.zero = *register == 0;
@@ -319,16 +337,36 @@ impl CPU {
       Instruction::CALL(test, target) => {
         let jump_condition = match test {
           JumpTest::NotZero => !self.registers.f.zero,
-          _ => { panic!("todo: support more conditions") }
+          JumpTest::NotCarry => !self.registers.f.carry,
+          JumpTest::Zero => self.registers.f.zero,
+          JumpTest::Carry => self.registers.f.carry,
+          JumpTest::Always => true,
         };
         self.call(jump_condition)
       }
       Instruction::RET(test) => {
         let jump_condition = match test {
           JumpTest::NotZero => !self.registers.f.zero,
-          _ => { panic!("todo: support more conditions") }
+          JumpTest::NotCarry => !self.registers.f.carry,
+          JumpTest::Zero => self.registers.f.zero,
+          JumpTest::Carry => self.registers.f.carry,
+          JumpTest::Always => true,
         };
         self.return_(jump_condition)
+      }
+      Instruction::RETI() => {
+        self.ime = true;
+        self.return_(true)
+      }
+      Instruction::DI() => {
+        self.ime = false;
+        self.pc.wrapping_add(1)
+      }
+      Instruction::EI() => {
+        self.pc = self.pc.wrapping_add(1);
+        self.step();
+        self.ime = true;
+        self.pc
       }
       Instruction::NOP() => {
         self.pc.wrapping_add(1)

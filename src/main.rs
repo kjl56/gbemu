@@ -25,7 +25,7 @@ fn main() {
   }
   //println!("{:?}", cpu.bus.memory);
   let mut i = 0;
-  while i < 500 {
+  while i < 50000 {
     cpu.step();
     i = i + 1;
   }
