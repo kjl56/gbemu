@@ -98,14 +98,177 @@ impl CPU {
     match instruction {
       Instruction::ADD(target, source) => {
         match target {
-          /*ArithmeticTarget::C => {
-            let value = self.registers.c;
-            let new_value = self.add(value);
-            self.registers.a = new_value;
+          ArithmeticTarget::A => {
+            match source {
+              ArithmeticSource::A => {self.registers.a = self.add(self.registers.a); self.pc.wrapping_add(1)},
+              ArithmeticSource::B => {self.registers.a = self.add(self.registers.b); self.pc.wrapping_add(1)},
+              ArithmeticSource::C => {self.registers.a = self.add(self.registers.c); self.pc.wrapping_add(1)},
+              ArithmeticSource::D => {self.registers.a = self.add(self.registers.d); self.pc.wrapping_add(1)},
+              ArithmeticSource::E => {self.registers.a = self.add(self.registers.e); self.pc.wrapping_add(1)},
+              ArithmeticSource::H => {self.registers.a = self.add(self.registers.h); self.pc.wrapping_add(1)},
+              ArithmeticSource::L => {self.registers.a = self.add(self.registers.l); self.pc.wrapping_add(1)},
+              ArithmeticSource::HL => {self.registers.a = self.add(self.bus.read_byte(self.registers.get_hl())); self.pc.wrapping_add(1)},
+              ArithmeticSource::D8 => {self.registers.a = self.add(self.read_next_byte()); self.pc.wrapping_add(2)},
+              _ => panic!("not a valid ADD instruction")
+            }
+          }
+          ArithmeticTarget::HL => {
+            let value = match source {
+              ArithmeticSource::BC => self.add16(self.registers.get_bc()),
+              ArithmeticSource::DE => self.add16(self.registers.get_de()),
+              ArithmeticSource::HL => self.add16(self.registers.get_hl()),
+              ArithmeticSource::SP => self.add16(self.sp),
+              _ => panic!("not a valid ADD instruction")
+            };
+            self.registers.set_hl(value);
             self.pc.wrapping_add(1)
-          }*/
-          _ => {/*todo: support more targets*/ self.pc}
+          }
+          ArithmeticTarget::SP => {
+            let value = self.read_next_byte() as i8 as i16;
+            let (new_value, did_overflow) = self.sp.overflowing_add_signed(value);
+            self.registers.f.zero = false;
+            self.registers.f.subtract = false;
+            self.registers.f.carry = did_overflow;
+            self.registers.f.half_carry = (self.sp & 0xF) + ((value as u16) & 0xF) > 0xF;
+            self.sp = new_value;
+            self.pc.wrapping_add(2)
+          }
         }      
+      }
+      Instruction::ADC(target, source) => {
+        match source {
+          ArithmeticSource::A => {self.registers.a = self.add(self.registers.a + (if self.registers.f.carry  {1} else {0})); self.pc.wrapping_add(1)},
+          ArithmeticSource::B => {self.registers.a = self.add(self.registers.b + (if self.registers.f.carry  {1} else {0})); self.pc.wrapping_add(1)},
+          ArithmeticSource::C => {self.registers.a = self.add(self.registers.c + (if self.registers.f.carry  {1} else {0})); self.pc.wrapping_add(1)},
+          ArithmeticSource::D => {self.registers.a = self.add(self.registers.d + (if self.registers.f.carry  {1} else {0})); self.pc.wrapping_add(1)},
+          ArithmeticSource::E => {self.registers.a = self.add(self.registers.e + (if self.registers.f.carry  {1} else {0})); self.pc.wrapping_add(1)},
+          ArithmeticSource::H => {self.registers.a = self.add(self.registers.h + (if self.registers.f.carry  {1} else {0})); self.pc.wrapping_add(1)},
+          ArithmeticSource::L => {self.registers.a = self.add(self.registers.l + (if self.registers.f.carry  {1} else {0})); self.pc.wrapping_add(1)},
+          ArithmeticSource::HL => {self.registers.a = self.add(self.bus.read_byte(self.registers.get_hl()) + (if self.registers.f.carry  {1} else {0})); self.pc.wrapping_add(1)},
+          ArithmeticSource::D8 => {self.registers.a = self.add(self.read_next_byte() + (if self.registers.f.carry  {1} else {0})); self.pc.wrapping_add(2)},
+          _ => panic!("not a valid ADD instruction")
+        }
+      }
+      Instruction::SUB(target, source) => {
+        match source {
+          ArithmeticSource::A => {self.registers.a = self.subtract(self.registers.a); self.pc.wrapping_add(1)},
+          ArithmeticSource::B => {self.registers.a = self.subtract(self.registers.b); self.pc.wrapping_add(1)},
+          ArithmeticSource::C => {self.registers.a = self.subtract(self.registers.c); self.pc.wrapping_add(1)},
+          ArithmeticSource::D => {self.registers.a = self.subtract(self.registers.d); self.pc.wrapping_add(1)},
+          ArithmeticSource::E => {self.registers.a = self.subtract(self.registers.e); self.pc.wrapping_add(1)},
+          ArithmeticSource::H => {self.registers.a = self.subtract(self.registers.h); self.pc.wrapping_add(1)},
+          ArithmeticSource::L => {self.registers.a = self.subtract(self.registers.l); self.pc.wrapping_add(1)},
+          ArithmeticSource::HL => {self.registers.a = self.subtract(self.bus.read_byte(self.registers.get_hl())); self.pc.wrapping_add(1)},
+          ArithmeticSource::D8 => {self.registers.a = self.subtract(self.read_next_byte()); self.pc.wrapping_add(2)},
+          _ => panic!("not a valid SUB instruction")
+        }
+      }
+      Instruction::AND(target, source) => {
+        match source {
+          ArithmeticSource::HL => {
+            let value = self.bus.read_byte(self.registers.get_hl());
+            self.registers.a = self.registers.a & value;
+            if self.registers.a == 0 { self.registers.f = registers::FlagsRegister::from(0b10100000) } else { self.registers.f = registers::FlagsRegister::from(0b00100000) }
+            self.pc.wrapping_add(1)
+          }
+          ArithmeticSource::D8 => {
+            let value = self.read_next_byte();
+            self.registers.a = self.registers.a & value;
+            if self.registers.a == 0 { self.registers.f = registers::FlagsRegister::from(0b10100000) } else { self.registers.f = registers::FlagsRegister::from(0b00100000) }
+            self.pc.wrapping_add(2)
+          }
+          _ => {
+            let value = match source {
+              ArithmeticSource::A => self.registers.a,
+              ArithmeticSource::B => self.registers.b,
+              ArithmeticSource::C => self.registers.c,
+              ArithmeticSource::D => self.registers.d,
+              ArithmeticSource::E => self.registers.e,
+              ArithmeticSource::H => self.registers.h,
+              ArithmeticSource::L => self.registers.l,
+              _ => panic!("not a valid AND instruction")
+            };
+            self.registers.a = self.registers.a & value;
+            if self.registers.a == 0 { self.registers.f = registers::FlagsRegister::from(0b10100000) } else { self.registers.f = registers::FlagsRegister::from(0b00100000) }
+            self.pc.wrapping_add(1)
+          }
+        }
+      }
+      Instruction::XOR(target, source) => {
+        match source {
+          ArithmeticSource::HL => {
+            let value = self.bus.read_byte(self.registers.get_hl());
+            self.registers.a = self.registers.a ^ value;
+            if self.registers.a == 0 { self.registers.f = registers::FlagsRegister::from(0b10000000) } else { self.registers.f = registers::FlagsRegister::from(0b00000000) }
+            self.pc.wrapping_add(1)
+          }
+          ArithmeticSource::D8 => {
+            let value = self.read_next_byte();
+            self.registers.a = self.registers.a ^ value;
+            if self.registers.a == 0 { self.registers.f = registers::FlagsRegister::from(0b10000000) } else { self.registers.f = registers::FlagsRegister::from(0b00000000) }
+            self.pc.wrapping_add(2)
+          }
+          _ => {
+            let value = match source {
+              ArithmeticSource::A => self.registers.a,
+              ArithmeticSource::B => self.registers.b,
+              ArithmeticSource::C => self.registers.c,
+              ArithmeticSource::D => self.registers.d,
+              ArithmeticSource::E => self.registers.e,
+              ArithmeticSource::H => self.registers.h,
+              ArithmeticSource::L => self.registers.l,
+              _ => panic!("not a valid XOR instruction")
+            };
+            self.registers.a = self.registers.a ^ value;
+            if self.registers.a == 0 { self.registers.f = registers::FlagsRegister::from(0b10000000) } else { self.registers.f = registers::FlagsRegister::from(0b00000000) }
+            self.pc.wrapping_add(1)
+          }
+        }
+      }
+      Instruction::OR(target, source) => {
+        match source {
+          ArithmeticSource::HL => {
+            let value = self.bus.read_byte(self.registers.get_hl());
+            self.registers.a = self.registers.a | value;
+            if self.registers.a == 0 { self.registers.f = registers::FlagsRegister::from(0b10000000) } else { self.registers.f = registers::FlagsRegister::from(0b00000000) }
+            self.pc.wrapping_add(1)
+          }
+          ArithmeticSource::D8 => {
+            let value = self.read_next_byte();
+            self.registers.a = self.registers.a | value;
+            if self.registers.a == 0 { self.registers.f = registers::FlagsRegister::from(0b10000000) } else { self.registers.f = registers::FlagsRegister::from(0b00000000) }
+            self.pc.wrapping_add(2)
+          }
+          _ => {
+            let value = match source {
+              ArithmeticSource::A => self.registers.a,
+              ArithmeticSource::B => self.registers.b,
+              ArithmeticSource::C => self.registers.c,
+              ArithmeticSource::D => self.registers.d,
+              ArithmeticSource::E => self.registers.e,
+              ArithmeticSource::H => self.registers.h,
+              ArithmeticSource::L => self.registers.l,
+              _ => panic!("not a valid XOR instruction")
+            };
+            self.registers.a = self.registers.a | value;
+            if self.registers.a == 0 { self.registers.f = registers::FlagsRegister::from(0b10000000) } else { self.registers.f = registers::FlagsRegister::from(0b00000000) }
+            self.pc.wrapping_add(1)
+          }
+        }
+      }
+      Instruction::CP(target, source) => {
+        match source {
+          ArithmeticSource::A => {let val = self.subtract(self.registers.a); self.pc.wrapping_add(1)},
+          ArithmeticSource::B => {let val = self.subtract(self.registers.b); self.pc.wrapping_add(1)},
+          ArithmeticSource::C => {let val = self.subtract(self.registers.c); self.pc.wrapping_add(1)},
+          ArithmeticSource::D => {let val = self.subtract(self.registers.d); self.pc.wrapping_add(1)},
+          ArithmeticSource::E => {let val = self.subtract(self.registers.e); self.pc.wrapping_add(1)},
+          ArithmeticSource::H => {let val = self.subtract(self.registers.h); self.pc.wrapping_add(1)},
+          ArithmeticSource::L => {let val = self.subtract(self.registers.l); self.pc.wrapping_add(1)},
+          ArithmeticSource::HL => {let val = self.subtract(self.bus.read_byte(self.registers.get_hl())); self.pc.wrapping_add(1)},
+          ArithmeticSource::D8 => {let val = self.subtract(self.read_next_byte()); self.pc.wrapping_add(2)},
+          _ => panic!("not a valid CP instruction")
+        }
       }
       Instruction::JP(test, target) => {
         let should_jump = match test {
@@ -334,6 +497,44 @@ impl CPU {
         }
         self.pc.wrapping_add(1)
       }
+      Instruction::RR(target) => {
+        match target {
+          RotateTarget::A => CPU::rotate_right(&mut self.registers.a, &mut self.registers.f),
+          RotateTarget::B => CPU::rotate_right(&mut self.registers.b, &mut self.registers.f),
+          RotateTarget::C => CPU::rotate_right(&mut self.registers.c, &mut self.registers.f),
+          RotateTarget::D => CPU::rotate_right(&mut self.registers.d, &mut self.registers.f),
+          RotateTarget::E => CPU::rotate_right(&mut self.registers.e, &mut self.registers.f),
+          RotateTarget::H => CPU::rotate_right(&mut self.registers.h, &mut self.registers.f),
+          RotateTarget::L => CPU::rotate_right(&mut self.registers.l, &mut self.registers.f),
+          RotateTarget::HL => {let mut deref = self.bus.read_byte(self.registers.get_hl()); CPU::rotate_right(&mut deref, &mut self.registers.f); self.bus.write_byte(self.registers.get_hl(), deref)},
+        }
+        self.pc.wrapping_add(2)
+      }
+      Instruction::RRA() => {
+        CPU::rotate_right(&mut self.registers.a, &mut self.registers.f);
+        self.registers.f.zero = false;
+        self.pc.wrapping_add(1)
+      }
+      Instruction::SRL(target) => {
+        fn register_shift(register: &mut u8, flags: &mut registers::FlagsRegister){
+          flags.carry = (0b1 & *register) != 0;
+          *register >>= 1;
+          flags.zero = *register == 0;
+          flags.subtract = false;
+          flags.half_carry = false;
+        }
+        match target {
+          RotateTarget::A => register_shift(&mut self.registers.a, &mut self.registers.f),
+          RotateTarget::B => register_shift(&mut self.registers.b, &mut self.registers.f),
+          RotateTarget::C => register_shift(&mut self.registers.c, &mut self.registers.f),
+          RotateTarget::D => register_shift(&mut self.registers.d, &mut self.registers.f),
+          RotateTarget::E => register_shift(&mut self.registers.e, &mut self.registers.f),
+          RotateTarget::H => register_shift(&mut self.registers.h, &mut self.registers.f),
+          RotateTarget::L => register_shift(&mut self.registers.l, &mut self.registers.f),
+          RotateTarget::HL => {let mut deref = self.bus.read_byte(self.registers.get_hl()); register_shift(&mut deref, &mut self.registers.f); self.bus.write_byte(self.registers.get_hl(), deref)},
+        }
+        self.pc.wrapping_add(2)
+      }
       Instruction::CALL(test, target) => {
         let jump_condition = match test {
           JumpTest::NotZero => !self.registers.f.zero,
@@ -375,37 +576,6 @@ impl CPU {
         self.is_halted = true;
         self.pc.wrapping_add(1)
       }
-      Instruction::XOR(target, source) => {
-        match source {
-          ArithmeticSource::HL => {
-            let value = self.bus.read_byte(self.registers.get_hl());
-            self.registers.a = self.registers.a ^ value;
-            if self.registers.a == 0 { self.registers.f.zero = true } else { self.registers.f.zero = false }
-            self.pc.wrapping_add(1)
-          }
-          ArithmeticSource::D8 => {
-            let value = self.read_next_byte();
-            self.registers.a = self.registers.a ^ value;
-            if self.registers.a == 0 { self.registers.f.zero = true } else { self.registers.f.zero = false }
-            self.pc.wrapping_add(2)
-          }
-          _ => {
-            let value = match source {
-              ArithmeticSource::A => self.registers.a,
-              ArithmeticSource::B => self.registers.b,
-              ArithmeticSource::C => self.registers.c,
-              ArithmeticSource::D => self.registers.d,
-              ArithmeticSource::E => self.registers.e,
-              ArithmeticSource::H => self.registers.h,
-              ArithmeticSource::L => self.registers.l,
-              _ => panic!("not a valid XOR instruction")
-            };
-            self.registers.a = self.registers.a ^ value;
-            if self.registers.a == 0 { self.registers.f.zero = true } else { self.registers.f.zero = false }
-            self.pc.wrapping_add(1)
-          }
-        }
-      }
       _ => { panic!("todo: Instruction: {:?} not yet implemented", instruction) }
     }
   }
@@ -420,6 +590,33 @@ impl CPU {
     //then the addition caused a carry from the lower nibble to the upper nibble.
     self.registers.f.half_carry = (self.registers.a & 0xF) + (value & 0xF) > 0xF;
     new_value
+  }
+
+  fn add16(&mut self, value: u16) -> u16 {
+    let (new_value, did_overflow) = self.registers.get_hl().overflowing_add(value);
+    self.registers.f.subtract = false;
+    self.registers.f.carry = did_overflow;
+    self.registers.f.half_carry = (self.registers.get_hl() & 0xFFF) + (value & 0xFFF) > 0xFFF;
+    new_value
+  }
+
+  fn subtract(&mut self, value: u8) -> u8 {
+    let (new_value, did_overflow) = self.registers.a.overflowing_sub(value);
+    self.registers.f.zero = new_value == 0;
+    self.registers.f.subtract = true;
+    self.registers.f.carry = did_overflow;
+    self.registers.f.half_carry = (new_value & 0xF) + (value & 0xF) > 0xF;
+    new_value
+  }
+
+  fn rotate_right(register: &mut u8, flags: &mut registers::FlagsRegister){
+    let b7 = flags.carry;
+    flags.carry = (0b1 & *register) != 0;
+    *register >>= 1;
+    if b7 {*register += 0b10000000}
+    flags.zero = *register == 0;
+    flags.subtract = false;
+    flags.half_carry = false;
   }
 
   fn push(&mut self, value: u16) {

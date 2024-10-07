@@ -8,7 +8,7 @@ pub enum ArithmeticSource {
 }
 #[derive(Debug)]
 pub enum RotateTarget {
-  A, B, C, D, E, H, L, BC, DE, HL
+  A, B, C, D, E, H, L, HL
 }
 #[derive(Debug)]
 pub enum StackTarget {
@@ -440,8 +440,8 @@ impl Instruction {
       0x31 => Some(Instruction::LD(LoadType::Word(LoadTarget::SP, LoadSource::D16))),
       0x32 => Some(Instruction::LD(LoadType::AToAddress(LoadTarget::HLD, LoadSource::A))),
       0x33 => Some(Instruction::INC(IncDecTarget::SP)),
-      0x34 => Some(Instruction::INC(IncDecTarget::HL)),
-      0x35 => Some(Instruction::DEC(IncDecTarget::HL)),
+      0x34 => Some(Instruction::INC(IncDecTarget::PntrHL)),
+      0x35 => Some(Instruction::DEC(IncDecTarget::PntrHL)),
       0x36 => Some(Instruction::LD(LoadType::AToAddress(LoadTarget::HL, LoadSource::D8))),
       0x37 => Some(Instruction::SCF()),
       0x38 => Some(Instruction::JR(JumpTest::Carry, JumpTarget::D16)),
