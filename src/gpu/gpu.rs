@@ -22,6 +22,18 @@ const VRAM_SIZE: usize = VRAM_END - VRAM_BEGIN + 1;
 //two 32 x 32 tile maps are present
 //first map uses 0x9800 - 0x9BFF, second map uses 0x9C00 - 0x9FFF
 //each can be used for either background or window
+//and contains 1-byte indexes of the tiles to be displayed
+//tiles fetched using "0x8000" or "0x8800" method based on LCDC.4
+//SCX and SCY used to scroll background by specifying origin of the display over top the background map
+//in DMG mode, LCDC.0 can disable the background (and the window)
+//a window layer overlays the background and is not scrollable, rendered starting from top left tile
+//window position can be moved with registers WX and WY, top left corner is (WX-7, WY)
+//window is toggled using LCDC.5 (only works in DMG mode when LCDC.0 == 1)
+//0xFE00 - 0xFE9F is the oam (object attribute memory)
+//each object has 4 bytes, allowing 40 total objects in the oam at once
+//byte 0: y coordinate from the top (screen is coords 16 - 160, 0-15 partially hides an object above screen, 160 will hide below screen since y-coord is the very top pixel of the object)
+//byte 1: x coordinate from the left (screen is coords 8 - 168)
+//byte 2: tile index (if LCDC.2 == 0 {})
 
 enum PPUMode {
   Zero,
