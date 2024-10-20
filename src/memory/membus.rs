@@ -26,18 +26,18 @@ const HRAM_BEGIN: usize = 0xFF80;
 const HRAM_END: usize = 0xFFFE;
 const INTERRUPT_REGISTER: usize = 0xFFFF;
 
-pub struct MemoryBus {
+pub struct MemoryBus<'a> {
   pub memory: [u8; 0x10000],
-  pub gpu: gpu::GPU,
+  pub gpu: gpu::GPU<'a>,
   pub oam_blocked: bool,
   pub eram_blocked: bool,
 }
 
-impl MemoryBus {
-  pub fn new() -> MemoryBus {
+impl MemoryBus<'_> {
+  pub fn new(sdlcanvas: &mut sdl2::render::WindowCanvas) -> MemoryBus {
     MemoryBus {
       memory: [0; 0x10000],
-      gpu: gpu::GPU::new(),
+      gpu: gpu::GPU::new(sdlcanvas),
       eram_blocked: true,
       oam_blocked: false,
     }
@@ -57,7 +57,7 @@ impl MemoryBus {
       ECHORAM_BEGIN ..= ECHORAM_END => {self.memory[address - 0x2000]} //mirror of wram (address - 0x2000)
       OAM_BEGIN ..= OAM_END => {self.memory[address]}
       BLOCKED_RAM_BEGIN ..= BLOCKED_RAM_END => {if self.oam_blocked {0xFF} else {0x00}} //behavior depends on hardware revision (DMG behavior implemented here, minus corruption)
-      0xFF44 => {0x90} //used for gameboy doctor
+      //0xFF44 => {0x90} //used for gameboy doctor
       IO_REGISTERS_BEGIN ..= IO_REGISTERS_END => {self.memory[address]} //replace later like with vram, not all i/o is both readable and writeable
       HRAM_BEGIN ..= HRAM_END => {self.memory[address]}
       INTERRUPT_REGISTER => {self.memory[address]}
