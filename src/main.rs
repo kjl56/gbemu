@@ -62,10 +62,14 @@ fn main() {
           }
       }
       // The rest of the game loop goes here...
-      cpu.step();
+      for mcycles in 0..17556 {
+        cpu.step();
+      }
+      cpu.bus.gpu.frame();
       //canvas.draw_point(Point::new(400, 300));
 
       //canvas.present();
       //::std::thread::sleep(Duration::new(0, 1_000_000_000u32 / 60));
     }
+    //println!("{:?}", cpu.bus.gpu.vram);
 }

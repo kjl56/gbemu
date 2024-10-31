@@ -55,9 +55,17 @@ impl MemoryBus<'_> {
       WRAM_BEGIN ..= WRAM_END => {self.memory[address]}
       WRAM_01_BEGIN ..= WRAM_01_END => {self.memory[address]}
       ECHORAM_BEGIN ..= ECHORAM_END => {self.memory[address - 0x2000]} //mirror of wram (address - 0x2000)
-      OAM_BEGIN ..= OAM_END => {self.memory[address]}
+      OAM_BEGIN ..= OAM_END => {
+        //self.memory[address]
+        self.gpu.read_oam(address - OAM_BEGIN)
+      }
       BLOCKED_RAM_BEGIN ..= BLOCKED_RAM_END => {if self.oam_blocked {0xFF} else {0x00}} //behavior depends on hardware revision (DMG behavior implemented here, minus corruption)
+      0xFF40 => {u8::from(&self.gpu.LCDC)}
       //0xFF44 => {0x90} //used for gameboy doctor
+      0xFF42 => {self.gpu.SCY}
+      0xFF43 => {self.gpu.SCX}
+      0xFF44 => {self.gpu.LY}
+      0xFF45 => {self.gpu.LYC}
       IO_REGISTERS_BEGIN ..= IO_REGISTERS_END => {self.memory[address]} //replace later like with vram, not all i/o is both readable and writeable
       HRAM_BEGIN ..= HRAM_END => {self.memory[address]}
       INTERRUPT_REGISTER => {self.memory[address]}
@@ -77,8 +85,16 @@ impl MemoryBus<'_> {
       WRAM_BEGIN ..= WRAM_END => {self.memory[address] = value}
       WRAM_01_BEGIN ..= WRAM_01_END => {self.memory[address] = value}
       ECHORAM_BEGIN ..= ECHORAM_END => {self.memory[address - 0x2000] = value} //mirror of wram (address - 0x2000)
-      OAM_BEGIN ..= OAM_END => {self.memory[address] = value} //replace later like with vram, direct writes only work during HBlank and VBlank periods (PPU stuff)
+      OAM_BEGIN ..= OAM_END => {//replace later like with vram, direct writes only work during HBlank and VBlank periods (PPU stuff)
+        //self.memory[address] = value
+        self.gpu.write_oam(address - OAM_BEGIN, value)
+      } 
       BLOCKED_RAM_BEGIN ..= BLOCKED_RAM_END => {/*blocked*/}
+      0xFF40 => {self.gpu.LCDC = value.into()}
+      0xFF42 => {self.gpu.SCY = value}
+      0xFF43 => {self.gpu.SCX = value}
+      0xFF44 => {self.gpu.LY = value}
+      0xFF45 => {self.gpu.LYC = value}
       IO_REGISTERS_BEGIN ..= IO_REGISTERS_END => {self.memory[address] = value} //replace later like with vram, not all i/o is both readable and writeable
       HRAM_BEGIN ..= HRAM_END => {self.memory[address] = value}
       INTERRUPT_REGISTER => {self.memory[address] = value}

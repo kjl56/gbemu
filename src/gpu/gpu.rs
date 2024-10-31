@@ -3,10 +3,16 @@ use std::collections::VecDeque;
 
 use sdl2::pixels::Color;
 use sdl2::rect::Point;
+use sdl2::rect::Rect;
+use sdl2::render::Canvas;
 
 const VRAM_BEGIN: usize = 0x8000;
 const VRAM_END: usize = 0x9FFF;
 const VRAM_SIZE: usize = VRAM_END - VRAM_BEGIN + 1;
+const OAM_BEGIN: usize = 0xFE00;
+const OAM_END: usize = 0xFE9F;
+const OAM_SIZE: usize = OAM_END - OAM_BEGIN + 1;
+
 //0X8000 - 0X97FF is for tile data
 //one tile is 16 bytes, leaving space for 384 tiles
 //a tile is 8 x 8 pixels, 2 bits per pixel for color (allowing for 4 colors)
@@ -18,23 +24,21 @@ const VRAM_SIZE: usize = VRAM_END - VRAM_BEGIN + 1;
 //"0x8000 method": uses 0x8000 as base pointer with unsigned addressing, tiles 0-127 are in block 0, and tiles 128-255 are in block 1
 //"0x8800 method": uses 0x9000 as base pointer with signed addressing, tiles 0-127 are in block 2, tiles -128 to -1 (ie. 128-255) are in block 1
 //objects always use 0x8000 method, bg and window use 0x8000 method if LCDC.4 == 1, else uses 0x8800 method
+
 //0x9800 - 0x9FFF is for tile maps
 //two 32 x 32 tile maps are present
 //first map uses 0x9800 - 0x9BFF, second map uses 0x9C00 - 0x9FFF
 //each can be used for either background or window
 //and contains 1-byte indexes of the tiles to be displayed
 //tiles fetched using "0x8000" or "0x8800" method based on LCDC.4
-//SCX and SCY used to scroll background by specifying origin of the display over top the background map
+//SCX (0xFF42) and SCY (0xFF43) used to scroll background by specifying origin (top left corner) of the display over top the background map
+//bottom right coordinates of the viewport is calculated as follows: bottom := (SCY + 143) % 256 and right := (SCX + 159) % 256
 //in DMG mode, LCDC.0 can disable the background (and the window)
 //a window layer overlays the background and is not scrollable, rendered starting from top left tile
-//window position can be moved with registers WX and WY, top left corner is (WX-7, WY)
+//window position can be moved with registers WX (0xFF4A) and WY (0xFF4B), top left corner is (WX+7, WY)
 //window is toggled using LCDC.5 (only works in DMG mode when LCDC.0 == 1)
-//0xFE00 - 0xFE9F is the oam (object attribute memory)
-//each object has 4 bytes, allowing 40 total objects in the oam at once
-//byte 0: y coordinate from the top (screen is coords 16 - 160, 0-15 partially hides an object above screen, 160 will hide below screen since y-coord is the very top pixel of the object)
-//byte 1: x coordinate from the left (screen is coords 8 - 168)
-//byte 2: tile index (if LCDC.2 == 0 {})
 
+#[derive(PartialEq)]
 enum PPUMode {
   Zero,
   One,
@@ -42,7 +46,7 @@ enum PPUMode {
   Three,
 }
 
-#[derive(Copy,Clone)]
+#[derive(Copy,Clone,PartialEq)]
 enum TilePixelValue {
     Zero,
     One,
@@ -58,19 +62,99 @@ fn empty_tile() -> Tile {
     [[TilePixelValue::Zero; 8]; 8]
 }
 
+//0xFE00 - 0xFE9F is the oam (object attribute memory)
+//each object has 4 bytes, allowing 40 total objects in the oam at once
+//byte 0: y coordinate from the top (screen is coords 16 - 160, 0-15 partially hides an object above screen, 160 will hide below screen since y-coord is the very top pixel of the object)
+//byte 1: x coordinate from the left (screen is coords 8 - 168)
+//byte 2: tile index (if LCDC.2 == 0 {(8x8 mode)use byte to select 1 object tile from block 0 or 1} else {(8x16 mode)select 2 object tiles})
+//byte 3: attributes/flags: each bit is a flag as follows:
+  //bit 7 = Priority: 0 = no, 1 = BG and Window colors 1–3 are drawn over this OBJ
+  //bit 6 = Y flip: 0 = normal, 1 = entire object is mirrored
+  //bit 5 = X flip: 0 = normal, 1 = entire object is mirrored
+  //bit 4 = DMG palette: 0 = OBP0, 1 = OBP1
+  //bit 3 = Bank(CGB only): 0 = fetch tile from VRAM bank 0, 1 = fetch from bank 1 	
+  //bit 2	1	0 = CGB palette: which of OBP0 - OBP7 to use
+//data usually written to OAM using the DMA function (IO register 0xFF46) (can be written to normally during PPU mode 0 and 1)
+#[derive(Copy,Clone)]
+struct OAMObject {
+  ycoord: u8,
+  xcoord: u8,
+  tile_index: u8,
+  flags: u8,
+}
+
 struct FIFOPixel {
-  color: u8,
+  color: TilePixelValue,
   palette: u8,
   sprite_priority: u8,
   background_priority: bool,
 }
 
+pub struct LCDC { //LCD Control, io register 0xFF40
+  seven: bool, //LCD and PPU enable
+  six: bool,   //window tile map area, 0 = 9800-9BFF, 1 = 9C00-9FFF
+  five: bool,  //window enable
+  four: bool,  //BG & Window tile data area: 0 = 8800–97FF; 1 = 8000–8FFF
+  three: bool, //BG tile map area: 0 = 9800–9BFF; 1 = 9C00–9FFF
+  two: bool,   //OBJ size: 0 = 8×8; 1 = 8×16
+  one: bool,   //OBJ enable
+  zero: bool,  //BG & Window enable / priority [Different meaning in CGB Mode]: 0 = Off; 1 = On
+}
+
+impl std::convert::From<&LCDC> for u8 {
+  fn from(lcdc: &LCDC) -> u8 {
+    (if lcdc.seven {1} else {0}) << 7 |
+    (if lcdc.six   {1} else {0}) << 6 |
+    (if lcdc.five  {1} else {0}) << 5 |
+    (if lcdc.four  {1} else {0}) << 4 |
+    (if lcdc.three {1} else {0}) << 3 |
+    (if lcdc.two   {1} else {0}) << 2 |
+    (if lcdc.one   {1} else {0}) << 1 |
+    (if lcdc.zero  {1} else {0}) << 0 
+  }
+} 
+impl std::convert::From<u8> for LCDC {
+  fn from(byte: u8) -> Self {
+    let seven = ((byte >> 7) & 0b1) != 0;
+    let six =   ((byte >> 6) & 0b1) != 0;
+    let five =  ((byte >> 5) & 0b1) != 0;
+    let four =  ((byte >> 4) & 0b1) != 0;
+    let three = ((byte >> 3) & 0b1) != 0;
+    let two =   ((byte >> 2) & 0b1) != 0;
+    let one =   ((byte >> 1) & 0b1) != 0;
+    let zero =  ((byte >> 0) & 0b1) != 0;
+
+    LCDC {
+      seven,
+      six,
+      five,
+      four,
+      three,
+      two,
+      one,
+      zero,
+    }
+  }
+}
+
+struct STAT { //LCD STATus, io register 0xFF41
+
+}
+
 pub struct GPU<'a>{
-    vram: [u8; VRAM_SIZE],
+    pub vram: [u8; VRAM_SIZE],
+    oam: [u8; OAM_SIZE],
     tile_set: [Tile; 384],
+    oam_set: [OAMObject; 40],
     canvas: &'a mut sdl2::render::WindowCanvas,
-    LCDC: u8,
+    pub LCDC: LCDC, //io register 0xFF40
+    pub SCY: u8, //background viewport y position, io register 0xFF42
+    pub SCX: u8, //background viewport x position, io register 0xFF43
+    pub LY: u8,  //LCD Y coordinate, io register 0xFF44 (read-only for cpu)
+    pub LYC: u8, //LY Compare, io register 0xFF45, constantly compared to LY, when equal sets related flag in STAT and (if enabled) triggers a STAT interrupt
+    LX : u8,
     mode: PPUMode,
+    scanline_objects: VecDeque<OAMObject>,
     background_FIFO: VecDeque<FIFOPixel>,
     object_FIFO: VecDeque<FIFOPixel>,
     i: u8,
@@ -80,68 +164,220 @@ impl GPU<'_> {
   pub fn new(sdlcanvas: &mut sdl2::render::WindowCanvas) -> GPU {
     GPU {
       vram: [0; VRAM_SIZE],
+      oam: [0; OAM_SIZE],
       tile_set: [default_tile(); 384],
+      oam_set: [
+        OAMObject {
+          ycoord: 0,
+          xcoord: 0,
+          tile_index: 0,
+          flags: 0,
+        }; 40],
       canvas: sdlcanvas,
-      LCDC: 0b00000000,
+      LCDC: LCDC {seven: false, six: false, five: false, four: false, three: false, two: false, one: false, zero: false,},
+      SCY: 0,
+      SCX: 0,
+      LY: 0,
+      LYC: 0,
+      LX: 0,
       mode: PPUMode::Two,
+      scanline_objects: VecDeque::with_capacity(10),
       background_FIFO: VecDeque::with_capacity(16),
       object_FIFO: VecDeque::with_capacity(16),
       i: 0,
     }
   }
+  
+  //during oam scan, the ppu compares LY to each object's Y position to select up to 10 objects to draw on that line
+  //the ppu scans the OAM sequentially, selecting the first 10 suitably positioned objects
+  //when there is overlap between 2 object's opaque pixels, priority is determined as follows:
+    //in DMG: smaller x coordinate has priority, if tied then whichever object comes first in the OAM
+    //in CGB: whichever object comes first in the OAM
+  //the "BG over OBJ" flag (byte 3-bit 7) is only checked after object priority is determined
 
   //one "dot" = 2^22 Hz (~4.194 MHz), i.e. one tick of the clock (cpu instructs take at least 4 ticks)
-  fn oam_scan() {//mode 2, 80 dots
+  fn oam_scan(&mut self) {//mode 2, 80 dots
+    self.mode = PPUMode::Two;
     //oam inaccessible (EXCEPT by DMA (io register 0xFF46))
+    self.scanline_objects.clear();
+    for object in self.oam_set {
+      if self.scanline_objects.len() < 10 {
+        if (object.ycoord == self.LY) | (self.LY < (object.ycoord + (if self.LCDC.two {16} else {8}))) {
+          self.scanline_objects.push_back(object);
+        }
+      }
+    }
   }
-  fn pixel_fetch(&mut self) {
+  fn pixel_fetch(&mut self, xcoord: &mut u8, ycoord: &mut u8) {
     //get tile
-    let mut tilemap = 0x0000;
-    let mut xcoord: u8 = 0;
-    let mut ycoord: u8 = 0;
-    if ((self.LCDC & 0b00001000) == 1 /*& xcoordNotInWindow*/) {tilemap = 0x9C00;}
-    else if ((self.LCDC & 0b01000000) == 1 /*& xcoordInsideWindow*/) {tilemap = 0x9C00;}
-    else {tilemap = 0x9800;}
+    let mut tilemap: usize = 0x0000;
+    let xcoordInsideWindow: bool = if (*xcoord < 8) | (*xcoord > 168) {false} else {true};
+    if (self.LCDC.three & !xcoordInsideWindow) {tilemap = 0x9C00 - VRAM_BEGIN;}
+    else if (self.LCDC.six & xcoordInsideWindow) {tilemap = 0x9C00 - VRAM_BEGIN;}
+    else {tilemap = 0x9800 - VRAM_BEGIN;}
     //if tile is window tile { xcoord = windowtilexcoord; ycoord = windowtileycoord}
-    //else { xcoord = ((SCX / 8) + xcoord) & 0x1F; ycoord = (currentscanline + SCY) & 255; } //xcoord will be between 0 and 31, ycoord between 0 and 255
+    //else { 
+      *xcoord = ((self.SCX / 8) + *xcoord) & 0x1F; 
+      *ycoord = (self.LY.wrapping_add(self.SCY)) & 255; 
+    //} //xcoord will be between 0 and 31, ycoord between 0 and 255
     //use xcoord and ycoord to get tile from vram (if the cpu is blocking vram, tile value read as 0xFF)
+    let tile_offset = (*xcoord as u16 + ((*ycoord as u16 / 8) * 32)) as usize;
+    let tile_address = self.vram[tilemap + tile_offset];
 
-    //get tile data low
-    //0 = 8800–97FF; 1 = 8000–8FFF
-    if self.LCDC & 0b00010000 == 1 {}
-    else {}
-
-    //get tile data high
+    //get tile data low and high
+    let mut tile = default_tile();
+    //0 = 8800–97FF (block 1 & 2); 1 = 8000–8FFF (block 0 & 1)
+    if self.LCDC.four {tile = self.tile_set[tile_address as usize];}
+    else {tile = self.tile_set[(0x100 + (tile_address as i8 as i16)) as usize];}
+    //push a row of 8 pixels to background fifo
+    let pixelrow = tile[(*ycoord % 8) as usize];
+    if self.background_FIFO.is_empty() {
+      for pixel in pixelrow {
+        let temp = FIFOPixel {
+          color: pixel,
+          palette: 0,
+          sprite_priority: 0,
+          background_priority: false,
+        };
+        self.background_FIFO.push_back(temp);
+      }
+    }
 
 
     //sleep
 
     //push
 
-  }
-  fn pixel_draw(&mut self) {//mode 3, 172-289 dots
-    //oam inaccessible (EXCEPT by DMA (io register 0xFF46))
-    //vram inaccessible
-    //CGB palettes inaccessible
 
-    self.background_FIFO.clear();
-    self.object_FIFO.clear();
-    self.pixel_fetch();
-  }
-  fn horizontal_blank() {//mode 0, 87-204 dots
 
-  }
-  fn vertical_blank() {//mode 1, 456 x 10 dots
+    //sprite
+    //each pixel of the target object row is checked. On CGB, horizontal flip is checked here. 
+    //If the target object pixel is not white and the pixel in the OAM FIFO is white, 
+    //or if the pixel in the OAM FIFO has higher priority than the target object’s pixel, 
+    //then the pixel in the OAM FIFO is replaced with the target object’s properties.
+    for object in &self.scanline_objects {
+      if (*xcoord >= object.xcoord) & (*xcoord <= (object.xcoord + 8)) {
+        let tile_address = object.tile_index + if (!self.LCDC.two) {0} else { if self.LY > (object.ycoord + 7) {1} else {0}};//check if LY is on second tile
+        let tile = self.tile_set[tile_address as usize];
+        //let pixelrow = tile[(if !self.LCDC.two {*ycoord % 8} else {}) as usize];
+        let pixelrow = tile[(*ycoord % 8) as usize];
+        if self.object_FIFO.is_empty() {
+          for pixel in pixelrow {
+            let temp = FIFOPixel {
+              color: pixel,
+              palette: (object.flags & 0b00010000),
+              sprite_priority: 1,
+              background_priority: (object.flags & 0b10000000) == 1,
+            };
+            self.object_FIFO.push_back(temp);
+          }
+        }
+        break;
+      }
+    }
     
+    //Before any mixing is done, if the OAM FIFO doesn’t have at least 8 pixels in it then transparent pixels with the lowest priority are pushed onto the OAM FIFO
+    let mut filled: bool = self.object_FIFO.len() >= 8;
+    while !filled {
+      let temp = FIFOPixel {
+        color: TilePixelValue::Zero,
+        palette: 0,
+        sprite_priority: 0,
+        background_priority: true,
+      };
+      self.object_FIFO.push_back(temp);
+      filled = self.object_FIFO.len() >= 8;
+    }
+  }
+  fn pixel_draw(&mut self) -> TilePixelValue {//mode 3, 172-289 dots
+    if self.mode == PPUMode::Two {
+      self.mode = PPUMode::Three;
+      //oam inaccessible (EXCEPT by DMA (io register 0xFF46))
+      //vram inaccessible
+      //CGB palettes inaccessible
+      
+      self.background_FIFO.clear();
+      self.object_FIFO.clear();
+    }
+    let mut xcoord: u8 = self.LX;
+    let mut ycoord: u8 = self.LY;
+    let mut pixelcolor: TilePixelValue = TilePixelValue::Two;
+    self.pixel_fetch(&mut xcoord, &mut ycoord);
+
+    //the two fifos start to be mixed
+    //If there are pixels in the background and OAM FIFOs then a pixel is popped off each
+    while (!self.background_FIFO.is_empty() & !self.object_FIFO.is_empty()) {
+      let mut bgpixel = self.background_FIFO.pop_front().unwrap();
+      let mut objpixel = self.object_FIFO.pop_front().unwrap();
+      let mut bgpriority: bool = false;
+      //If OAM pixel is not transparent and LCDC.1 is enabled then OAM pixel’s background priority property is used if it’s the same or higher priority as the background pixel’s background priority
+      if (objpixel.color != TilePixelValue::Zero) & self.LCDC.one {bgpriority = objpixel.background_priority;}
+      //if LCDC.0 == 0 pixel color value of background is 0, else color value is whatever is popped off background fifo
+      if !self.LCDC.zero {bgpixel.color = TilePixelValue::Zero;}
+      if bgpriority {
+        if bgpixel.color != TilePixelValue::Zero {
+          //When the pixel popped off the background FIFO has a color value other than 0 and it has priority then the object pixel will be discarded
+          //At this point, on DMG, the color of the pixel is retrieved from the BGP register and pushed to the LCD
+          pixelcolor = bgpixel.color;
+        } else {
+          pixelcolor = objpixel.color;
+        }
+      } else {
+        //When an object pixel has priority, the color value is retrieved from the popped pixel from the OAM FIFO
+        //On DMG the color for the pixel is retrieved from either the OBP1 or OBP0 register depending on the pixel’s palette property. 
+        //If the palette property is 1 then OBP1 is used, otherwise OBP0 is used. The pixel is then pushed to the LCD.
+        //On CGB when palette access is blocked, a black pixel is pushed to the LCD
+        pixelcolor = objpixel.color;
+      }
+    }
+    return pixelcolor;
+    //if background fifo is empty or current pixel is 160 or more, dont push a pixel to screen
+  }
+  fn horizontal_blank(&mut self) {//mode 0, 87-204 dots
+    self.mode = PPUMode::Zero;
+  }
+  fn vertical_blank(&mut self) {//mode 1, 456 x 10 dots
+    self.mode = PPUMode::One;
+    self.LY = 0;
   }
 
   pub fn frame(&mut self) {
+    self.oam_scan();
     
-    self.i = (self.i+1) % 255;
-    self.canvas.set_draw_color(Color::RGB(0, 0, 0));
-    self.canvas.clear();
-    self.canvas.set_draw_color(Color::RGB(self.i, 64, 255 - self.i));
-    self.canvas.draw_point(Point::new(80, 72));
+    let mut pixel_data = Vec::new();
+    while self.LY < 144 {
+      while self.LX < 160 {
+        let pixelcolor = self.pixel_draw();
+        pixel_data.push((self.LX, self.LY, match pixelcolor {
+          TilePixelValue::Zero => Color::RGB(255, 255, 255),
+          TilePixelValue::One => Color::RGB(170, 170, 170),
+          TilePixelValue::Two => Color::RGB(85, 85, 85),
+          TilePixelValue::Three => Color::RGB(0, 0, 0),
+        }));
+        self.LX += 1;
+      }
+      self.horizontal_blank();
+      self.LX = 0;
+      self.LY += 1;
+    }
+    
+    let texture_creator = self.canvas.texture_creator();
+    let mut texture = texture_creator
+        .create_texture_target(texture_creator.default_pixel_format(), 160, 144)
+        .unwrap();
+    let result = self.canvas.with_texture_canvas(&mut texture, |texture_canvas| {
+        texture_canvas.set_draw_color(Color::RGBA(0, 255, 0, 255));
+        texture_canvas.clear();
+        //println!("{:?}", pixel_data);
+        for (lx, ly, pixel_color) in pixel_data {
+          texture_canvas.set_draw_color(pixel_color);
+          texture_canvas.draw_point(Point::new(lx.into(),ly.into()));
+        }
+    });
+
+    self.vertical_blank();
+    
+    self.canvas.copy(&texture, None, None);
     self.canvas.present();
   }
 
@@ -211,5 +447,22 @@ impl GPU<'_> {
 
       self.tile_set[tile_index][row_index][pixel_index] = value;
     }
+  }
+
+  pub fn read_oam(&self, address: usize) -> u8 {
+    self.oam[address]
+  }
+
+  pub fn write_oam(&mut self, index: usize, value: u8) {
+    self.oam[index] = value;
+
+    let setIndex = index / 4;
+    match index % 4 {
+      0 => self.oam_set[setIndex].ycoord = value,
+      1 => self.oam_set[setIndex].xcoord = value,
+      2 => self.oam_set[setIndex].tile_index = value,
+      3 => self.oam_set[setIndex].flags = value,
+      _ => unreachable!(),
+    } 
   }
 }

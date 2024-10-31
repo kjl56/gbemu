@@ -75,7 +75,7 @@ impl CPU<'_> {
       panic!("Unknown instruction found for: {}", description);
     };
 
-    self.bus.gpu.frame();
+    //self.bus.gpu.frame();
     self.pc = next_pc;
   }
 
