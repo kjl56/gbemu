@@ -95,7 +95,7 @@ impl CPU<'_> {
     if self.is_halted {
       return 0x0
     }
-    println!("{:?}", instruction);
+    //println!("{:?}", instruction);
     match instruction {
       Instruction::ADD(target, source) => {
         match target {

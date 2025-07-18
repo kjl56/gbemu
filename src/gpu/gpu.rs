@@ -46,12 +46,13 @@ enum PPUMode {
   Three,
 }
 
-#[derive(Copy,Clone,PartialEq)]
+#[derive(Copy,Clone,PartialEq,Debug)]
 enum TilePixelValue {
     Zero,
     One,
     Two,
     Three,
+    None,
 }
 
 type Tile = [[TilePixelValue; 8]; 8];
@@ -75,7 +76,7 @@ fn empty_tile() -> Tile {
   //bit 3 = Bank(CGB only): 0 = fetch tile from VRAM bank 0, 1 = fetch from bank 1 	
   //bit 2	1	0 = CGB palette: which of OBP0 - OBP7 to use
 //data usually written to OAM using the DMA function (IO register 0xFF46) (can be written to normally during PPU mode 0 and 1)
-#[derive(Copy,Clone)]
+#[derive(Copy,Clone,Debug)]
 struct OAMObject {
   ycoord: u8,
   xcoord: u8,
@@ -153,6 +154,8 @@ pub struct GPU<'a>{
     pub LY: u8,  //LCD Y coordinate, io register 0xFF44 (read-only for cpu)
     pub LYC: u8, //LY Compare, io register 0xFF45, constantly compared to LY, when equal sets related flag in STAT and (if enabled) triggers a STAT interrupt
     LX : u8,
+    pub WY: u8, //window Y coordinate, io register 0xFF4A
+    pub WX: u8, //window X coordinate + 7, io register 0xFF4B
     mode: PPUMode,
     scanline_objects: VecDeque<OAMObject>,
     background_FIFO: VecDeque<FIFOPixel>,
@@ -180,6 +183,8 @@ impl GPU<'_> {
       LY: 0,
       LYC: 0,
       LX: 0,
+      WY: 0,
+      WX: 0,
       mode: PPUMode::Two,
       scanline_objects: VecDeque::with_capacity(10),
       background_FIFO: VecDeque::with_capacity(16),
@@ -202,7 +207,10 @@ impl GPU<'_> {
     self.scanline_objects.clear();
     for object in self.oam_set {
       if self.scanline_objects.len() < 10 {
-        if (object.ycoord == self.LY) | (self.LY < (object.ycoord + (if self.LCDC.two {16} else {8}))) {
+        let objectTop = object.ycoord;
+        let objectBottom = object.ycoord + (if self.LCDC.two {16} else {8});
+        if ((self.LY >= objectTop) & (self.LY < objectBottom)) {
+          println!("on scanline {:?}: {:?}", self.LY, object);
           self.scanline_objects.push_back(object);
         }
       }
@@ -215,20 +223,22 @@ impl GPU<'_> {
     if (self.LCDC.three & !xcoordInsideWindow) {tilemap = 0x9C00 - VRAM_BEGIN;}
     else if (self.LCDC.six & xcoordInsideWindow) {tilemap = 0x9C00 - VRAM_BEGIN;}
     else {tilemap = 0x9800 - VRAM_BEGIN;}
-    //if tile is window tile { xcoord = windowtilexcoord; ycoord = windowtileycoord}
-    //else { 
+    //if tile is window tile 
+    if self.LCDC.five { *xcoord = self.WX; *ycoord = self.WY}
+    else { 
       *xcoord = ((self.SCX / 8) + *xcoord) & 0x1F; 
       *ycoord = (self.LY.wrapping_add(self.SCY)) & 255; 
-    //} //xcoord will be between 0 and 31, ycoord between 0 and 255
+    } //xcoord will be between 0 and 31, ycoord between 0 and 255
     //use xcoord and ycoord to get tile from vram (if the cpu is blocking vram, tile value read as 0xFF)
     let tile_offset = (*xcoord as u16 + ((*ycoord as u16 / 8) * 32)) as usize;
     let tile_address = self.vram[tilemap + tile_offset];
-
+    //println!("{:?}", tile_address);
     //get tile data low and high
     let mut tile = default_tile();
     //0 = 8800–97FF (block 1 & 2); 1 = 8000–8FFF (block 0 & 1)
     if self.LCDC.four {tile = self.tile_set[tile_address as usize];}
     else {tile = self.tile_set[(0x100 + (tile_address as i8 as i16)) as usize];}
+    //println!("{:?}", tile);
     //push a row of 8 pixels to background fifo
     let pixelrow = tile[(*ycoord % 8) as usize];
     if self.background_FIFO.is_empty() {
@@ -301,12 +311,12 @@ impl GPU<'_> {
     }
     let mut xcoord: u8 = self.LX;
     let mut ycoord: u8 = self.LY;
-    let mut pixelcolor: TilePixelValue = TilePixelValue::Two;
-    self.pixel_fetch(&mut xcoord, &mut ycoord);
+    let mut pixelcolor: TilePixelValue = TilePixelValue::None;
+
 
     //the two fifos start to be mixed
     //If there are pixels in the background and OAM FIFOs then a pixel is popped off each
-    while (!self.background_FIFO.is_empty() & !self.object_FIFO.is_empty()) {
+    if (!self.background_FIFO.is_empty() & !self.object_FIFO.is_empty()) {
       let mut bgpixel = self.background_FIFO.pop_front().unwrap();
       let mut objpixel = self.object_FIFO.pop_front().unwrap();
       let mut bgpriority: bool = false;
@@ -329,6 +339,8 @@ impl GPU<'_> {
         //On CGB when palette access is blocked, a black pixel is pushed to the LCD
         pixelcolor = objpixel.color;
       }
+    } else {
+      self.pixel_fetch(&mut xcoord, &mut ycoord);
     }
     return pixelcolor;
     //if background fifo is empty or current pixel is 160 or more, dont push a pixel to screen
@@ -342,10 +354,15 @@ impl GPU<'_> {
   }
 
   pub fn frame(&mut self) {
-    self.oam_scan();
+    //println!("{:?}", self.vram);
+    //println!("in oam set: {:?}", self.oam_set);
+    println!("oam data: {:?}", self.oam);
+    //println!("tile set: {:?}", self.tile_set);
     
     let mut pixel_data = Vec::new();
     while self.LY < 144 {
+      //println!("scanline {:?}", self.LY);
+      self.oam_scan();
       while self.LX < 160 {
         let pixelcolor = self.pixel_draw();
         pixel_data.push((self.LX, self.LY, match pixelcolor {
@@ -353,6 +370,7 @@ impl GPU<'_> {
           TilePixelValue::One => Color::RGB(170, 170, 170),
           TilePixelValue::Two => Color::RGB(85, 85, 85),
           TilePixelValue::Three => Color::RGB(0, 0, 0),
+          TilePixelValue::None => Color::RGB(255, 105, 180),
         }));
         self.LX += 1;
       }
@@ -361,6 +379,32 @@ impl GPU<'_> {
       self.LY += 1;
     }
     
+    //printing tile data
+    /*
+    let mut row: u8 = 0;
+    let mut col: u8 = 0;
+    for tile in self.tile_set {
+      if col == 16 { col = 0; row += 1;} 
+      let mut i: u8 = 0;
+      while i < 8 {
+        let mut j: u8 = 0;
+        while j < 8 {
+          let pixelcolor = tile[i as usize][j as usize];
+          pixel_data.push(((col * 8) + j, (row * 8) + i, match pixelcolor {
+            TilePixelValue::Zero => Color::RGB(255, 255, 255),
+            TilePixelValue::One => Color::RGB(170, 170, 170),
+            TilePixelValue::Two => Color::RGB(85, 85, 85),
+            TilePixelValue::Three => Color::RGB(0, 0, 0),
+            TilePixelValue::None => Color::RGB(255, 105, 180),
+          }));
+          j += 1;
+        }
+        i += 1;
+      }
+        col += 1;
+    }
+    */
+
     let texture_creator = self.canvas.texture_creator();
     let mut texture = texture_creator
         .create_texture_target(texture_creator.default_pixel_format(), 160, 144)

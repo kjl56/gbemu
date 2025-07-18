@@ -28,7 +28,7 @@ fn main() {
   let sdl_context = sdl2::init().unwrap();
   let video_subsystem = sdl_context.video().unwrap();
   
-  let window = video_subsystem.window("rust-sdl2 demo", 160, 144)
+  let window = video_subsystem.window("rust-sdl2 demo", 160*3, 144*3)
   .position_centered()
   .build()
   .unwrap();

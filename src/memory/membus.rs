@@ -45,6 +45,7 @@ impl MemoryBus<'_> {
 
   pub fn read_byte(&self, address: u16) -> u8 {
     let address = address as usize;
+    //let value = 
     match address {
       ROM_BANK_00_BEGIN ..= ROM_BANK_00_END => {self.memory[address]}
       ROM_BANK_01_BEGIN ..= ROM_BANK_01_END => {self.memory[address]}
@@ -66,19 +67,25 @@ impl MemoryBus<'_> {
       0xFF43 => {self.gpu.SCX}
       0xFF44 => {self.gpu.LY}
       0xFF45 => {self.gpu.LYC}
+      0xFF4A => {self.gpu.WY}
+      0xFF4B => {self.gpu.WX}
       IO_REGISTERS_BEGIN ..= IO_REGISTERS_END => {self.memory[address]} //replace later like with vram, not all i/o is both readable and writeable
       HRAM_BEGIN ..= HRAM_END => {self.memory[address]}
       INTERRUPT_REGISTER => {self.memory[address]}
       _ => panic!("Attempt to read outside defined memory bus range")
     }
+    //println!("read byte: {} from address: {}", value, address);
+    //return value;
   }
 
   pub fn write_byte(&mut self, address: u16, value: u8) {
     let address = address as usize;
+    //println!("writing byte: {} to address: {}", value, address);
     match address {
       ROM_BANK_00_BEGIN ..= ROM_BANK_00_END => {} //replace later like with vram, writes trigger many different behaviors
       ROM_BANK_01_BEGIN ..= ROM_BANK_01_END => {} //depending on what register is attempted to be written to and what MBC is present in the game cartrige
       VRAM_BEGIN ..= VRAM_END => {
+        println!("vram written to at address: {}", address - VRAM_BEGIN);
         self.gpu.write_vram(address - VRAM_BEGIN, value)
       }
       ERAM_BEGIN ..= ERAM_END => {if self.eram_blocked {/*blocked*/} else {self.memory[address] = value}}
@@ -87,6 +94,7 @@ impl MemoryBus<'_> {
       ECHORAM_BEGIN ..= ECHORAM_END => {self.memory[address - 0x2000] = value} //mirror of wram (address - 0x2000)
       OAM_BEGIN ..= OAM_END => {//replace later like with vram, direct writes only work during HBlank and VBlank periods (PPU stuff)
         //self.memory[address] = value
+        println!("vram written to at address: {}", address - OAM_BEGIN);
         self.gpu.write_oam(address - OAM_BEGIN, value)
       } 
       BLOCKED_RAM_BEGIN ..= BLOCKED_RAM_END => {/*blocked*/}
@@ -95,6 +103,8 @@ impl MemoryBus<'_> {
       0xFF43 => {self.gpu.SCX = value}
       0xFF44 => {self.gpu.LY = value}
       0xFF45 => {self.gpu.LYC = value}
+      0xFF4A => {self.gpu.WY = value}
+      0xFF4B => {self.gpu.WX = value}
       IO_REGISTERS_BEGIN ..= IO_REGISTERS_END => {self.memory[address] = value} //replace later like with vram, not all i/o is both readable and writeable
       HRAM_BEGIN ..= HRAM_END => {self.memory[address] = value}
       INTERRUPT_REGISTER => {self.memory[address] = value}
