@@ -85,7 +85,7 @@ impl MemoryBus<'_> {
       ROM_BANK_00_BEGIN ..= ROM_BANK_00_END => {} //replace later like with vram, writes trigger many different behaviors
       ROM_BANK_01_BEGIN ..= ROM_BANK_01_END => {} //depending on what register is attempted to be written to and what MBC is present in the game cartrige
       VRAM_BEGIN ..= VRAM_END => {
-        println!("vram written to at address: {}", address - VRAM_BEGIN);
+        //println!("vram written to at address: {}", address - VRAM_BEGIN);
         self.gpu.write_vram(address - VRAM_BEGIN, value)
       }
       ERAM_BEGIN ..= ERAM_END => {if self.eram_blocked {/*blocked*/} else {self.memory[address] = value}}
@@ -94,7 +94,7 @@ impl MemoryBus<'_> {
       ECHORAM_BEGIN ..= ECHORAM_END => {self.memory[address - 0x2000] = value} //mirror of wram (address - 0x2000)
       OAM_BEGIN ..= OAM_END => {//replace later like with vram, direct writes only work during HBlank and VBlank periods (PPU stuff)
         //self.memory[address] = value
-        println!("vram written to at address: {}", address - OAM_BEGIN);
+        //println!("vram written to at address: {}", address - OAM_BEGIN);
         self.gpu.write_oam(address - OAM_BEGIN, value)
       } 
       BLOCKED_RAM_BEGIN ..= BLOCKED_RAM_END => {/*blocked*/}

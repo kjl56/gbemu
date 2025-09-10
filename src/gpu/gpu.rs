@@ -210,12 +210,12 @@ impl GPU<'_> {
         let objectTop = object.ycoord;
         let objectBottom = object.ycoord + (if self.LCDC.two {16} else {8});
         if ((self.LY >= objectTop) & (self.LY < objectBottom)) {
-          println!("on scanline {:?}: {:?}", self.LY, object);
+          //println!("on scanline {:?}: {:?}", self.LY, object);
           self.scanline_objects.push_back(object);
         }
       }
     }
-  }
+  }/*
   fn pixel_fetch(&mut self, xcoord: &mut u8, ycoord: &mut u8) {
     //get tile
     let mut tilemap: usize = 0x0000;
@@ -232,7 +232,7 @@ impl GPU<'_> {
     //use xcoord and ycoord to get tile from vram (if the cpu is blocking vram, tile value read as 0xFF)
     let tile_offset = (*xcoord as u16 + ((*ycoord as u16 / 8) * 32)) as usize;
     let tile_address = self.vram[tilemap + tile_offset];
-    //println!("{:?}", tile_address);
+    println!("{:X?}", tile_address);
     //get tile data low and high
     let mut tile = default_tile();
     //0 = 8800–97FF (block 1 & 2); 1 = 8000–8FFF (block 0 & 1)
@@ -341,10 +341,11 @@ impl GPU<'_> {
       }
     } else {
       self.pixel_fetch(&mut xcoord, &mut ycoord);
+      pixelcolor = self.pixel_draw();
     }
     return pixelcolor;
     //if background fifo is empty or current pixel is 160 or more, dont push a pixel to screen
-  }
+  }*/
   fn horizontal_blank(&mut self) {//mode 0, 87-204 dots
     self.mode = PPUMode::Zero;
   }
@@ -352,58 +353,114 @@ impl GPU<'_> {
     self.mode = PPUMode::One;
     self.LY = 0;
   }
+  fn scanline_fetch(&mut self) -> [TilePixelValue; 160] {
+    //ignore objects and windows for now
+    let mut scanlinepixels = [TilePixelValue::Zero; 160];
+    let mapstart: usize = if (self.LCDC.three) {0x9C00 - VRAM_BEGIN} else {0x9800 - VRAM_BEGIN};
+    //current tilemap pixel line
+    let pixelrow = self.SCY.wrapping_add(self.LY);
+    for col in 0..160 {
+      let pixelcol = self.SCX.wrapping_add(col);
+      //now with the background x and y coords, need to fetch the appropriate tile from the tile map
+      let tileaddress = self.vram[mapstart + ((pixelrow as u16 / 8 * 32) + (pixelcol as u16 / 8)) as usize];
+      let tile = self.tile_set[tileaddress as usize];
+      scanlinepixels[col as usize] = tile[(pixelrow % 8) as usize][(pixelcol % 8) as usize];
+    }
+    return scanlinepixels;
+  }
 
   pub fn frame(&mut self) {
     //println!("{:?}", self.vram);
     //println!("in oam set: {:?}", self.oam_set);
-    println!("oam data: {:?}", self.oam);
+    //println!("oam data: {:?}", self.oam);
     //println!("tile set: {:?}", self.tile_set);
+    //let mapstart: usize = 0x9800 - VRAM_BEGIN; 
+    //let slice = &self.vram[mapstart..];
+    //println!("tile map: {:X?}", slice); //first map uses 0x9800 - 0x9BFF, second map uses 0x9C00 - 0x9FFF
     
     let mut pixel_data = Vec::new();
-    while self.LY < 144 {
-      //println!("scanline {:?}", self.LY);
-      self.oam_scan();
-      while self.LX < 160 {
-        let pixelcolor = self.pixel_draw();
-        pixel_data.push((self.LX, self.LY, match pixelcolor {
-          TilePixelValue::Zero => Color::RGB(255, 255, 255),
-          TilePixelValue::One => Color::RGB(170, 170, 170),
-          TilePixelValue::Two => Color::RGB(85, 85, 85),
-          TilePixelValue::Three => Color::RGB(0, 0, 0),
-          TilePixelValue::None => Color::RGB(255, 105, 180),
-        }));
-        self.LX += 1;
-      }
-      self.horizontal_blank();
-      self.LX = 0;
-      self.LY += 1;
-    }
-    
-    //printing tile data
-    /*
-    let mut row: u8 = 0;
-    let mut col: u8 = 0;
-    for tile in self.tile_set {
-      if col == 16 { col = 0; row += 1;} 
-      let mut i: u8 = 0;
-      while i < 8 {
-        let mut j: u8 = 0;
-        while j < 8 {
-          let pixelcolor = tile[i as usize][j as usize];
-          pixel_data.push(((col * 8) + j, (row * 8) + i, match pixelcolor {
+    let memprint: u8 = 0;
+    if memprint == 0 {
+      while self.LY < 144 {
+        //println!("scanline {:?}", self.LY);
+        self.oam_scan();
+        let pixelline = self.scanline_fetch();
+        //while self.LX < 160 {
+          //let pixelcolor = self.pixel_draw();
+        for pixelcolor in pixelline {
+          pixel_data.push((self.LX, self.LY, match pixelcolor {
             TilePixelValue::Zero => Color::RGB(255, 255, 255),
             TilePixelValue::One => Color::RGB(170, 170, 170),
             TilePixelValue::Two => Color::RGB(85, 85, 85),
             TilePixelValue::Three => Color::RGB(0, 0, 0),
             TilePixelValue::None => Color::RGB(255, 105, 180),
           }));
-          j += 1;
+          self.LX += 1;
         }
-        i += 1;
+        self.horizontal_blank();
+        self.LX = 0;
+        self.LY += 1;
       }
-        col += 1;
     }
-    */
+    
+    //printing tile data
+    if memprint == 1 {
+      let mut row: u8 = 0;
+      let mut col: u8 = 0;
+      for tile in self.tile_set {
+        if col == 16 { col = 0; row += 1;} 
+        let mut i: u8 = 0;
+        while i < 8 {
+          let mut j: u8 = 0;
+          while j < 8 {
+            let pixelcolor = tile[i as usize][j as usize];
+            pixel_data.push(((col * 8) + j, (row * 8) + i, match pixelcolor {
+              TilePixelValue::Zero => Color::RGB(255, 255, 255),
+              TilePixelValue::One => Color::RGB(170, 170, 170),
+              TilePixelValue::Two => Color::RGB(85, 85, 85),
+              TilePixelValue::Three => Color::RGB(0, 0, 0),
+              TilePixelValue::None => Color::RGB(255, 105, 180),
+            }));
+            j += 1;
+          }
+          i += 1;
+        }
+        col += 1;
+      }
+    }
+    
+    //printing tile map
+    if memprint == 2 {
+      let map1start: usize = 0x9800 - VRAM_BEGIN;
+      let map1end: usize = 0x9BFF - VRAM_BEGIN; 
+      let slice = &self.vram[map1start..=map1end];
+      let mut row: u8 = 0;
+      let mut col: u8 = 0;
+      for tileaddress in slice {
+        let tile = self.tile_set[*tileaddress as usize];
+        
+        if col == 32 { col = 0; row += 1;} 
+        let mut i: u8 = 0;
+        while i < 8 {
+          let mut j: u8 = 0;
+          while j < 8 {
+            let pixelcolor = tile[i as usize][j as usize];
+            pixel_data.push(((col * 8) + j, (row * 8) + i, match pixelcolor {
+              TilePixelValue::Zero => Color::RGB(255, 255, 255),
+              TilePixelValue::One => Color::RGB(170, 170, 170),
+              TilePixelValue::Two => Color::RGB(85, 85, 85),
+              TilePixelValue::Three => Color::RGB(0, 0, 0),
+              TilePixelValue::None => Color::RGB(255, 105, 180),
+            }));
+            j += 1;
+          }
+          i += 1;
+        }
+        col += 1;
+        
+      }
+    }
+    
 
     let texture_creator = self.canvas.texture_creator();
     let mut texture = texture_creator
