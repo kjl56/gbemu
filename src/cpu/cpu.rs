@@ -6,18 +6,18 @@ use crate::cpu::registers;
 use crate::cpu::instructions::{Instruction, ArithmeticTarget, ArithmeticSource, RotateTarget, StackTarget, IncDecTarget, LoadType, LoadTarget, LoadSource, JumpTest, JumpTarget};
 use crate::memory::membus;
 
-pub struct CPU {
+pub struct CPU<'a> {
   registers: registers::Registers,
   pc: u16,
   sp: u16,
   ime: bool,
-  pub bus: membus::MemoryBus,
+  pub bus: membus::MemoryBus<'a>,
   is_halted: bool,
   logfile: fs::File,
 }
 
-impl CPU {
-  pub fn new() -> CPU {
+impl CPU<'_> {
+  pub fn new(sdlcanvas: &mut sdl2::render::WindowCanvas) -> CPU {
     CPU {
       registers: registers::Registers {
         a: 0x01,
@@ -36,7 +36,7 @@ impl CPU {
       pc: 0x0100,
       sp: 0xFFFE,
       ime: false,
-      bus: membus::MemoryBus::new(),
+      bus: membus::MemoryBus::new(sdlcanvas),
       is_halted: false,
       logfile: fs::File::options().write(true).create(true).open("doctorlog.txt").unwrap(),
     }
@@ -75,6 +75,7 @@ impl CPU {
       panic!("Unknown instruction found for: {}", description);
     };
 
+    //self.bus.gpu.frame();
     self.pc = next_pc;
   }
 
@@ -94,7 +95,7 @@ impl CPU {
     if self.is_halted {
       return 0x0
     }
-    println!("{:?}", instruction);
+    //println!("{:?}", instruction);
     match instruction {
       Instruction::ADD(target, source) => {
         match target {
@@ -466,9 +467,9 @@ impl CPU {
           IncDecTarget::E => increment_register(&mut self.registers.e, &mut self.registers.f),
           IncDecTarget::H => increment_register(&mut self.registers.h, &mut self.registers.f),
           IncDecTarget::L => increment_register(&mut self.registers.l, &mut self.registers.f),
-          IncDecTarget::BC => self.registers.set_bc(self.registers.get_bc()+1),
-          IncDecTarget::DE => self.registers.set_de(self.registers.get_de()+1),
-          IncDecTarget::HL => self.registers.set_hl(self.registers.get_hl()+1),
+          IncDecTarget::BC => self.registers.set_bc(self.registers.get_bc().wrapping_add(1)),
+          IncDecTarget::DE => self.registers.set_de(self.registers.get_de().wrapping_add(1)),
+          IncDecTarget::HL => self.registers.set_hl(self.registers.get_hl().wrapping_add(1)),
           IncDecTarget::PntrHL => {let mut deref = self.bus.read_byte(self.registers.get_hl()); increment_register(&mut deref, &mut self.registers.f); self.bus.write_byte(self.registers.get_hl(), deref)},
           IncDecTarget::SP => self.sp = self.sp.wrapping_add(1),
         }
@@ -489,9 +490,9 @@ impl CPU {
           IncDecTarget::E => decrement_register(&mut self.registers.e, &mut self.registers.f),
           IncDecTarget::H => decrement_register(&mut self.registers.h, &mut self.registers.f),
           IncDecTarget::L => decrement_register(&mut self.registers.l, &mut self.registers.f),
-          IncDecTarget::BC => self.registers.set_bc(self.registers.get_bc()-1),
-          IncDecTarget::DE => self.registers.set_de(self.registers.get_de()-1),
-          IncDecTarget::HL => self.registers.set_hl(self.registers.get_hl()-1),
+          IncDecTarget::BC => self.registers.set_bc(self.registers.get_bc().wrapping_sub(1)),
+          IncDecTarget::DE => self.registers.set_de(self.registers.get_de().wrapping_sub(1)),
+          IncDecTarget::HL => self.registers.set_hl(self.registers.get_hl().wrapping_sub(1)),
           IncDecTarget::PntrHL => {let mut deref = self.bus.read_byte(self.registers.get_hl()); decrement_register(&mut deref, &mut self.registers.f); self.bus.write_byte(self.registers.get_hl(), deref)},
           IncDecTarget::SP => self.sp = self.sp.wrapping_sub(1),
         }
