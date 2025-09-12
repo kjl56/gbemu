@@ -536,6 +536,28 @@ impl CPU<'_> {
         }
         self.pc.wrapping_add(2)
       }
+      Instruction::SWAP(target) => {
+        fn swap(register: &mut u8, flags: &mut registers::FlagsRegister) {
+          let mut temp = (*register & 0xF0) >> 4;
+          temp += (*register & 0x0F) << 4;
+          *register = temp;
+          flags.zero = *register == 0;
+          flags.subtract = false;
+          flags.half_carry = false;
+          flags.carry = false;
+        }
+        match target {
+          RotateTarget::A => swap(&mut self.registers.a, &mut self.registers.f),
+          RotateTarget::B => swap(&mut self.registers.b, &mut self.registers.f),
+          RotateTarget::C => swap(&mut self.registers.c, &mut self.registers.f),
+          RotateTarget::D => swap(&mut self.registers.d, &mut self.registers.f),
+          RotateTarget::E => swap(&mut self.registers.e, &mut self.registers.f),
+          RotateTarget::H => swap(&mut self.registers.h, &mut self.registers.f),
+          RotateTarget::L => swap(&mut self.registers.l, &mut self.registers.f),
+          RotateTarget::HL => {let mut deref = self.bus.read_byte(self.registers.get_hl()); swap(&mut deref, &mut self.registers.f); self.bus.write_byte(self.registers.get_hl(), deref)},
+        }
+        self.pc.wrapping_add(2)
+      }
       Instruction::CALL(test, target) => {
         let jump_condition = match test {
           JumpTest::NotZero => !self.registers.f.zero,
@@ -555,6 +577,21 @@ impl CPU<'_> {
           JumpTest::Always => true,
         };
         self.return_(jump_condition)
+      }
+      Instruction::RST(target) => {
+        let next_pc = match target {
+          JumpTarget::Addr00 => 0x00,
+          JumpTarget::Addr08 => 0x08,
+          JumpTarget::Addr10 => 0x10,
+          JumpTarget::Addr18 => 0x18,
+          JumpTarget::Addr20 => 0x20,
+          JumpTarget::Addr28 => 0x28,
+          JumpTarget::Addr30 => 0x30,
+          JumpTarget::Addr38 => 0x38,
+          _ => panic!("invalid target for RST operation")
+        };
+        self.push(self.pc.wrapping_add(1));
+        next_pc
       }
       Instruction::RETI() => {
         self.ime = true;
