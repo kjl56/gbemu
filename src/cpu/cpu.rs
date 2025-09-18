@@ -3,7 +3,7 @@ use std::fs;
 use std::io::Write;
 
 use crate::cpu::registers;
-use crate::cpu::instructions::{Instruction, ArithmeticTarget, ArithmeticSource, RotateTarget, StackTarget, IncDecTarget, LoadType, LoadTarget, LoadSource, JumpTest, JumpTarget};
+use crate::cpu::instructions::{Instruction, ArithmeticTarget, ArithmeticSource, RotateTarget, StackTarget, IncDecTarget, LoadType, LoadTarget, LoadSource, JumpTest, JumpTarget, TestBit, TestTarget};
 use crate::memory::membus;
 
 pub struct CPU<'a> {
@@ -138,16 +138,16 @@ impl CPU<'_> {
       }
       Instruction::ADC(target, source) => {
         match source {
-          ArithmeticSource::A => {self.registers.a = self.add(self.registers.a + (if self.registers.f.carry  {1} else {0})); self.pc.wrapping_add(1)},
-          ArithmeticSource::B => {self.registers.a = self.add(self.registers.b + (if self.registers.f.carry  {1} else {0})); self.pc.wrapping_add(1)},
-          ArithmeticSource::C => {self.registers.a = self.add(self.registers.c + (if self.registers.f.carry  {1} else {0})); self.pc.wrapping_add(1)},
-          ArithmeticSource::D => {self.registers.a = self.add(self.registers.d + (if self.registers.f.carry  {1} else {0})); self.pc.wrapping_add(1)},
-          ArithmeticSource::E => {self.registers.a = self.add(self.registers.e + (if self.registers.f.carry  {1} else {0})); self.pc.wrapping_add(1)},
-          ArithmeticSource::H => {self.registers.a = self.add(self.registers.h + (if self.registers.f.carry  {1} else {0})); self.pc.wrapping_add(1)},
-          ArithmeticSource::L => {self.registers.a = self.add(self.registers.l + (if self.registers.f.carry  {1} else {0})); self.pc.wrapping_add(1)},
-          ArithmeticSource::HL => {self.registers.a = self.add(self.bus.read_byte(self.registers.get_hl()) + (if self.registers.f.carry  {1} else {0})); self.pc.wrapping_add(1)},
-          ArithmeticSource::D8 => {self.registers.a = self.add(self.read_next_byte() + (if self.registers.f.carry  {1} else {0})); self.pc.wrapping_add(2)},
-          _ => panic!("not a valid ADD instruction")
+          ArithmeticSource::A => {self.registers.a = self.add(self.registers.a.wrapping_add(if self.registers.f.carry  {1} else {0})); self.pc.wrapping_add(1)},
+          ArithmeticSource::B => {self.registers.a = self.add(self.registers.b.wrapping_add(if self.registers.f.carry  {1} else {0})); self.pc.wrapping_add(1)},
+          ArithmeticSource::C => {self.registers.a = self.add(self.registers.c.wrapping_add(if self.registers.f.carry  {1} else {0})); self.pc.wrapping_add(1)},
+          ArithmeticSource::D => {self.registers.a = self.add(self.registers.d.wrapping_add(if self.registers.f.carry  {1} else {0})); self.pc.wrapping_add(1)},
+          ArithmeticSource::E => {self.registers.a = self.add(self.registers.e.wrapping_add(if self.registers.f.carry  {1} else {0})); self.pc.wrapping_add(1)},
+          ArithmeticSource::H => {self.registers.a = self.add(self.registers.h.wrapping_add(if self.registers.f.carry  {1} else {0})); self.pc.wrapping_add(1)},
+          ArithmeticSource::L => {self.registers.a = self.add(self.registers.l.wrapping_add(if self.registers.f.carry  {1} else {0})); self.pc.wrapping_add(1)},
+          ArithmeticSource::HL => {self.registers.a = self.add(self.bus.read_byte(self.registers.get_hl()).wrapping_add(if self.registers.f.carry  {1} else {0})); self.pc.wrapping_add(1)},
+          ArithmeticSource::D8 => {self.registers.a = self.add(self.read_next_byte().wrapping_add(if self.registers.f.carry  {1} else {0})); self.pc.wrapping_add(2)},
+          _ => panic!("not a valid ADC instruction")
         }
       }
       Instruction::SUB(target, source) => {
@@ -162,6 +162,20 @@ impl CPU<'_> {
           ArithmeticSource::HL => {self.registers.a = self.subtract(self.bus.read_byte(self.registers.get_hl())); self.pc.wrapping_add(1)},
           ArithmeticSource::D8 => {self.registers.a = self.subtract(self.read_next_byte()); self.pc.wrapping_add(2)},
           _ => panic!("not a valid SUB instruction")
+        }
+      }
+      Instruction::SBC(target, source) => {
+        match source {
+          ArithmeticSource::A => {self.registers.a = self.subtract(self.registers.a.wrapping_sub(if self.registers.f.carry  {1} else {0})); self.pc.wrapping_add(1)},
+          ArithmeticSource::B => {self.registers.a = self.subtract(self.registers.b.wrapping_sub(if self.registers.f.carry  {1} else {0})); self.pc.wrapping_add(1)},
+          ArithmeticSource::C => {self.registers.a = self.subtract(self.registers.c.wrapping_sub(if self.registers.f.carry  {1} else {0})); self.pc.wrapping_add(1)},
+          ArithmeticSource::D => {self.registers.a = self.subtract(self.registers.d.wrapping_sub(if self.registers.f.carry  {1} else {0})); self.pc.wrapping_add(1)},
+          ArithmeticSource::E => {self.registers.a = self.subtract(self.registers.e.wrapping_sub(if self.registers.f.carry  {1} else {0})); self.pc.wrapping_add(1)},
+          ArithmeticSource::H => {self.registers.a = self.subtract(self.registers.h.wrapping_sub(if self.registers.f.carry  {1} else {0})); self.pc.wrapping_add(1)},
+          ArithmeticSource::L => {self.registers.a = self.subtract(self.registers.l.wrapping_sub(if self.registers.f.carry  {1} else {0})); self.pc.wrapping_add(1)},
+          ArithmeticSource::HL => {self.registers.a = self.subtract(self.bus.read_byte(self.registers.get_hl()).wrapping_sub(if self.registers.f.carry  {1} else {0})); self.pc.wrapping_add(1)},
+          ArithmeticSource::D8 => {self.registers.a = self.subtract(self.read_next_byte().wrapping_sub(if self.registers.f.carry  {1} else {0})); self.pc.wrapping_add(2)},
+          _ => panic!("not a valid SBC instruction")
         }
       }
       Instruction::AND(target, source) => {
@@ -498,29 +512,125 @@ impl CPU<'_> {
         }
         self.pc.wrapping_add(1)
       }
+      Instruction::RL(target) => {
+        match target {
+          RotateTarget::A => CPU::rotate_left(&mut self.registers.a, &mut self.registers.f, true),
+          RotateTarget::B => CPU::rotate_left(&mut self.registers.b, &mut self.registers.f, true),
+          RotateTarget::C => CPU::rotate_left(&mut self.registers.c, &mut self.registers.f, true),
+          RotateTarget::D => CPU::rotate_left(&mut self.registers.d, &mut self.registers.f, true),
+          RotateTarget::E => CPU::rotate_left(&mut self.registers.e, &mut self.registers.f, true),
+          RotateTarget::H => CPU::rotate_left(&mut self.registers.h, &mut self.registers.f, true),
+          RotateTarget::L => CPU::rotate_left(&mut self.registers.l, &mut self.registers.f, true),
+          RotateTarget::HL => {let mut deref = self.bus.read_byte(self.registers.get_hl()); CPU::rotate_left(&mut deref, &mut self.registers.f, true); self.bus.write_byte(self.registers.get_hl(), deref)},
+        }
+        self.pc.wrapping_add(2)
+      }
+      Instruction::RLA() => {
+        CPU::rotate_left(&mut self.registers.a, &mut self.registers.f, true);
+        self.registers.f.zero = false;
+        self.pc.wrapping_add(1)
+      }
+      Instruction::RLC(target) => {
+        match target {
+          RotateTarget::A => CPU::rotate_left(&mut self.registers.a, &mut self.registers.f, false),
+          RotateTarget::B => CPU::rotate_left(&mut self.registers.b, &mut self.registers.f, false),
+          RotateTarget::C => CPU::rotate_left(&mut self.registers.c, &mut self.registers.f, false),
+          RotateTarget::D => CPU::rotate_left(&mut self.registers.d, &mut self.registers.f, false),
+          RotateTarget::E => CPU::rotate_left(&mut self.registers.e, &mut self.registers.f, false),
+          RotateTarget::H => CPU::rotate_left(&mut self.registers.h, &mut self.registers.f, false),
+          RotateTarget::L => CPU::rotate_left(&mut self.registers.l, &mut self.registers.f, false),
+          RotateTarget::HL => {let mut deref = self.bus.read_byte(self.registers.get_hl()); CPU::rotate_left(&mut deref, &mut self.registers.f, false); self.bus.write_byte(self.registers.get_hl(), deref)},
+        }
+        self.pc.wrapping_add(2)
+      }
+      Instruction::RLCA() => {
+        CPU::rotate_left(&mut self.registers.a, &mut self.registers.f, false);
+        self.registers.f.zero = false;
+        self.pc.wrapping_add(1)
+      }
       Instruction::RR(target) => {
         match target {
-          RotateTarget::A => CPU::rotate_right(&mut self.registers.a, &mut self.registers.f),
-          RotateTarget::B => CPU::rotate_right(&mut self.registers.b, &mut self.registers.f),
-          RotateTarget::C => CPU::rotate_right(&mut self.registers.c, &mut self.registers.f),
-          RotateTarget::D => CPU::rotate_right(&mut self.registers.d, &mut self.registers.f),
-          RotateTarget::E => CPU::rotate_right(&mut self.registers.e, &mut self.registers.f),
-          RotateTarget::H => CPU::rotate_right(&mut self.registers.h, &mut self.registers.f),
-          RotateTarget::L => CPU::rotate_right(&mut self.registers.l, &mut self.registers.f),
-          RotateTarget::HL => {let mut deref = self.bus.read_byte(self.registers.get_hl()); CPU::rotate_right(&mut deref, &mut self.registers.f); self.bus.write_byte(self.registers.get_hl(), deref)},
+          RotateTarget::A => CPU::rotate_right(&mut self.registers.a, &mut self.registers.f, true),
+          RotateTarget::B => CPU::rotate_right(&mut self.registers.b, &mut self.registers.f, true),
+          RotateTarget::C => CPU::rotate_right(&mut self.registers.c, &mut self.registers.f, true),
+          RotateTarget::D => CPU::rotate_right(&mut self.registers.d, &mut self.registers.f, true),
+          RotateTarget::E => CPU::rotate_right(&mut self.registers.e, &mut self.registers.f, true),
+          RotateTarget::H => CPU::rotate_right(&mut self.registers.h, &mut self.registers.f, true),
+          RotateTarget::L => CPU::rotate_right(&mut self.registers.l, &mut self.registers.f, true),
+          RotateTarget::HL => {let mut deref = self.bus.read_byte(self.registers.get_hl()); CPU::rotate_right(&mut deref, &mut self.registers.f, true); self.bus.write_byte(self.registers.get_hl(), deref)},
         }
         self.pc.wrapping_add(2)
       }
       Instruction::RRA() => {
-        CPU::rotate_right(&mut self.registers.a, &mut self.registers.f);
+        CPU::rotate_right(&mut self.registers.a, &mut self.registers.f, true);
         self.registers.f.zero = false;
         self.pc.wrapping_add(1)
       }
-      Instruction::SRL(target) => {
+      Instruction::RRC(target) => {
+        match target {
+          RotateTarget::A => CPU::rotate_right(&mut self.registers.a, &mut self.registers.f, false),
+          RotateTarget::B => CPU::rotate_right(&mut self.registers.b, &mut self.registers.f, false),
+          RotateTarget::C => CPU::rotate_right(&mut self.registers.c, &mut self.registers.f, false),
+          RotateTarget::D => CPU::rotate_right(&mut self.registers.d, &mut self.registers.f, false),
+          RotateTarget::E => CPU::rotate_right(&mut self.registers.e, &mut self.registers.f, false),
+          RotateTarget::H => CPU::rotate_right(&mut self.registers.h, &mut self.registers.f, false),
+          RotateTarget::L => CPU::rotate_right(&mut self.registers.l, &mut self.registers.f, false),
+          RotateTarget::HL => {let mut deref = self.bus.read_byte(self.registers.get_hl()); CPU::rotate_right(&mut deref, &mut self.registers.f, false); self.bus.write_byte(self.registers.get_hl(), deref)},
+        }
+        self.pc.wrapping_add(2)
+      }
+      Instruction::RRCA() => {
+        CPU::rotate_right(&mut self.registers.a, &mut self.registers.f, false);
+        self.registers.f.zero = false;
+        self.pc.wrapping_add(1)
+      }
+      Instruction::SLA(target) => {
         fn register_shift(register: &mut u8, flags: &mut registers::FlagsRegister){
-          flags.carry = (0b1 & *register) != 0;
+          flags.carry = ((0b1 & (*register >> 7)) != 0);
+          *register <<= 1;
+          flags.zero = (*register == 0);
+          flags.subtract = false;
+          flags.half_carry = false;
+        }
+        match target {
+          RotateTarget::A => register_shift(&mut self.registers.a, &mut self.registers.f),
+          RotateTarget::B => register_shift(&mut self.registers.b, &mut self.registers.f),
+          RotateTarget::C => register_shift(&mut self.registers.c, &mut self.registers.f),
+          RotateTarget::D => register_shift(&mut self.registers.d, &mut self.registers.f),
+          RotateTarget::E => register_shift(&mut self.registers.e, &mut self.registers.f),
+          RotateTarget::H => register_shift(&mut self.registers.h, &mut self.registers.f),
+          RotateTarget::L => register_shift(&mut self.registers.l, &mut self.registers.f),
+          RotateTarget::HL => {let mut deref = self.bus.read_byte(self.registers.get_hl()); register_shift(&mut deref, &mut self.registers.f); self.bus.write_byte(self.registers.get_hl(), deref)},
+        }
+        self.pc.wrapping_add(2)
+      }
+      Instruction::SRA(target) => {
+        fn register_shift(register: &mut u8, flags: &mut registers::FlagsRegister){
+          flags.carry = ((0b1 & *register) != 0);
+          let b7 = (0b1 & (*register >> 7));
           *register >>= 1;
-          flags.zero = *register == 0;
+          if (b7 != 0) {*register += 0b10000000;}
+          flags.zero = (*register == 0);
+          flags.subtract = false;
+          flags.half_carry = false;
+        }
+        match target {
+          RotateTarget::A => register_shift(&mut self.registers.a, &mut self.registers.f),
+          RotateTarget::B => register_shift(&mut self.registers.b, &mut self.registers.f),
+          RotateTarget::C => register_shift(&mut self.registers.c, &mut self.registers.f),
+          RotateTarget::D => register_shift(&mut self.registers.d, &mut self.registers.f),
+          RotateTarget::E => register_shift(&mut self.registers.e, &mut self.registers.f),
+          RotateTarget::H => register_shift(&mut self.registers.h, &mut self.registers.f),
+          RotateTarget::L => register_shift(&mut self.registers.l, &mut self.registers.f),
+          RotateTarget::HL => {let mut deref = self.bus.read_byte(self.registers.get_hl()); register_shift(&mut deref, &mut self.registers.f); self.bus.write_byte(self.registers.get_hl(), deref)},
+        }
+        self.pc.wrapping_add(2)
+      }
+      Instruction::SRL(target) => {
+        fn register_shift(register: &mut u8, flags: &mut registers::FlagsRegister) {
+          flags.carry = ((0b1 & *register) != 0);
+          *register >>= 1;
+          flags.zero = (*register == 0);
           flags.subtract = false;
           flags.half_carry = false;
         }
@@ -557,6 +667,116 @@ impl CPU<'_> {
           RotateTarget::HL => {let mut deref = self.bus.read_byte(self.registers.get_hl()); swap(&mut deref, &mut self.registers.f); self.bus.write_byte(self.registers.get_hl(), deref)},
         }
         self.pc.wrapping_add(2)
+      }
+      Instruction::DAA() => {
+        let mut adjustment = 0;
+        if self.registers.f.subtract {
+          if self.registers.f.half_carry {adjustment += 6;}
+          if self.registers.f.carry {adjustment += 60;}
+          self.registers.a.wrapping_add(adjustment);
+        } else {
+          if self.registers.f.half_carry || (self.registers.a & 0xF > 9) {adjustment += 6;}
+          if self.registers.f.carry || (self.registers.a > 99) {adjustment += 60; self.registers.f.carry = true;}
+          self.registers.a.wrapping_add(adjustment);
+        }
+        if adjustment == 0 {self.registers.f.zero = true;}
+        self.registers.f.half_carry = false;
+        self.pc.wrapping_add(1)
+      }
+      Instruction::SCF() => {
+        self.registers.f.carry = true;
+        self.registers.f.half_carry = false;
+        self.registers.f.subtract = false;
+        self.pc.wrapping_add(1)
+      }
+      Instruction::CPL() => {
+        self.registers.a = !self.registers.a;
+        self.registers.f.subtract = true;
+        self.registers.f.half_carry = true;
+        self.pc.wrapping_add(1)
+      }
+      Instruction::CCF() => {
+        self.registers.f.subtract = false;
+        self.registers.f.half_carry = false;
+        self.registers.f.carry = !self.registers.f.carry;
+        self.pc.wrapping_add(1)
+      }
+      Instruction::BIT(testbit, target) => {
+        fn bit_test(register: &mut u8, flags: &mut registers::FlagsRegister, testbit: TestBit) {
+          flags.zero = ( 0 == match testbit {
+            TestBit::Zero => 0b1 & *register,
+            TestBit::One => 0b1 & (*register >> 1),
+            TestBit::Two => 0b1 & (*register >> 2),
+            TestBit::Three => 0b1 & (*register >> 3),
+            TestBit::Four => 0b1 & (*register >> 4),
+            TestBit::Five => 0b1 & (*register >> 5),
+            TestBit::Six => 0b1 & (*register >> 6),
+            TestBit::Seven => 0b1 & (*register >> 7),
+          } );
+          flags.subtract = false;
+          flags.half_carry = true;
+        }
+        match target {
+          TestTarget::A => bit_test(&mut self.registers.a, &mut self.registers.f, testbit),
+          TestTarget::B => bit_test(&mut self.registers.b, &mut self.registers.f, testbit),
+          TestTarget::C => bit_test(&mut self.registers.c, &mut self.registers.f, testbit),
+          TestTarget::D => bit_test(&mut self.registers.d, &mut self.registers.f, testbit),
+          TestTarget::E => bit_test(&mut self.registers.e, &mut self.registers.f, testbit),
+          TestTarget::H => bit_test(&mut self.registers.h, &mut self.registers.f, testbit),
+          TestTarget::L => bit_test(&mut self.registers.l, &mut self.registers.f, testbit),
+          TestTarget::HL => {let mut deref = self.bus.read_byte(self.registers.get_hl()); bit_test(&mut deref, &mut self.registers.f, testbit)},
+        }
+        self.pc.wrapping_add(3)
+      }
+      Instruction::RES(testbit, target) => {
+        fn bit_set(register: &mut u8, testbit: TestBit) {
+          *register = match testbit {
+            TestBit::Zero => (*register & !(1 << 0)) | ((false as u8) << 0),
+            TestBit::One => (*register & !(1 << 1)) | ((false as u8) << 1),
+            TestBit::Two => (*register & !(1 << 2)) | ((false as u8) << 2),
+            TestBit::Three => (*register & !(1 << 3)) | ((false as u8) << 3),
+            TestBit::Four => (*register & !(1 << 4)) | ((false as u8) << 4),
+            TestBit::Five => (*register & !(1 << 5)) | ((false as u8) << 5),
+            TestBit::Six => (*register & !(1 << 6)) | ((false as u8) << 6),
+            TestBit::Seven => (*register & !(1 << 7)) | ((false as u8) << 7),
+          }
+        }
+        match target {
+          TestTarget::A => bit_set(&mut self.registers.a, testbit),
+          TestTarget::B => bit_set(&mut self.registers.b, testbit),
+          TestTarget::C => bit_set(&mut self.registers.c, testbit),
+          TestTarget::D => bit_set(&mut self.registers.d, testbit),
+          TestTarget::E => bit_set(&mut self.registers.e, testbit),
+          TestTarget::H => bit_set(&mut self.registers.h, testbit),
+          TestTarget::L => bit_set(&mut self.registers.l, testbit),
+          TestTarget::HL => {let mut deref = self.bus.read_byte(self.registers.get_hl()); bit_set(&mut deref, testbit); self.bus.write_byte(self.registers.get_hl(), deref)},
+        }
+        self.pc.wrapping_add(3)
+      }
+      Instruction::SET(testbit, target) => {
+        fn bit_set(register: &mut u8, testbit: TestBit) {
+          *register = match testbit {
+            TestBit::Zero => (*register & !(1 << 0)) | ((true as u8) << 0),
+            TestBit::One => (*register & !(1 << 1)) | ((true as u8) << 1),
+            TestBit::Two => (*register & !(1 << 2)) | ((true as u8) << 2),
+            TestBit::Three => (*register & !(1 << 3)) | ((true as u8) << 3),
+            TestBit::Four => (*register & !(1 << 4)) | ((true as u8) << 4),
+            TestBit::Five => (*register & !(1 << 5)) | ((true as u8) << 5),
+            TestBit::Six => (*register & !(1 << 6)) | ((true as u8) << 6),
+            TestBit::Seven => (*register & !(1 << 7)) | ((true as u8) << 7),
+          }
+        }
+        match target {
+          TestTarget::A => bit_set(&mut self.registers.a, testbit),
+          TestTarget::B => bit_set(&mut self.registers.b, testbit),
+          TestTarget::C => bit_set(&mut self.registers.c, testbit),
+          TestTarget::D => bit_set(&mut self.registers.d, testbit),
+          TestTarget::E => bit_set(&mut self.registers.e, testbit),
+          TestTarget::H => bit_set(&mut self.registers.h, testbit),
+          TestTarget::L => bit_set(&mut self.registers.l, testbit),
+          TestTarget::HL => {let mut deref = self.bus.read_byte(self.registers.get_hl()); bit_set(&mut deref, testbit); self.bus.write_byte(self.registers.get_hl(), deref)},
+        }
+        self.pc.wrapping_add(3)
       }
       Instruction::CALL(test, target) => {
         let jump_condition = match test {
@@ -610,6 +830,12 @@ impl CPU<'_> {
       Instruction::NOP() => {
         self.pc.wrapping_add(1)
       }
+      Instruction::STOP() => {
+        //intended to set cpu to very low power mode, however, not a single commercial game used this instruction to do that
+        //so, in the CGB nintendo repurposed it as a toggle for the CPU's double speed mode
+        //this instruction is very wonky and will not function as intended under certain conditions, please consult the flowchart in the pandocs
+        self.pc.wrapping_add(2)
+      }
       Instruction::HALT() => {
         self.is_halted = true;
         self.pc.wrapping_add(1)
@@ -647,12 +873,24 @@ impl CPU<'_> {
     new_value
   }
 
-  fn rotate_right(register: &mut u8, flags: &mut registers::FlagsRegister){
-    let b7 = flags.carry;
-    flags.carry = (0b1 & *register) != 0;
-    *register >>= 1;
-    if b7 {*register += 0b10000000}
+  fn rotate_left(register: &mut u8, flags: &mut registers::FlagsRegister, rotatecarry: bool) {
+    let b7 = (0b1 & (*register >> 7));
+    let b0 = if rotatecarry {flags.carry as u8} else {b7};
+    flags.carry = (b7 != 0);
+    *register <<= 1;
+    *register += b0;
     flags.zero = *register == 0;
+    flags.subtract = false;
+    flags.half_carry = false;
+  }
+
+  fn rotate_right(register: &mut u8, flags: &mut registers::FlagsRegister, rotatecarry: bool) {
+    let b0 = (0b1 & *register);
+    let b7 = if rotatecarry {flags.carry as u8} else {b0};
+    flags.carry = (b0 != 0);
+    *register >>= 1;
+    if (b7 != 0) {*register += 0b10000000}
+    flags.zero = (*register == 0);
     flags.subtract = false;
     flags.half_carry = false;
   }
@@ -692,9 +930,4 @@ impl CPU<'_> {
       self.pc.wrapping_add(1)
     }
   }
-
-  /*additional instructions to implement:
-    ADDHL, ADC, SUB, SBC, AND, OR, XOR, CP, INC, DEC, CCF, SCF, RRA, RLA, RRCA, 
-    RRLA, CPL, BIT, RESET, SET, SRL, RR, RL, RRC, RLC, SRA, SLA, SWAP
-  */
 }
