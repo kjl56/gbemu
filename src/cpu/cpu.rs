@@ -62,6 +62,7 @@ impl CPU<'_> {
           self.bus.read_byte(self.pc + 3)
       );
       writeln!(self.logfile, "{}", cpustate);
+      println!("{}", cpustate);
     }
     let mut instruction_byte = self.bus.read_byte(self.pc);
     let prefixed = instruction_byte == 0xCB;
@@ -95,7 +96,7 @@ impl CPU<'_> {
     if self.is_halted {
       return 0x0
     }
-    //println!("{:?}", instruction);
+    println!("{:?}", instruction);
     match instruction {
       Instruction::ADD(target, source) => {
         match target {
@@ -129,7 +130,7 @@ impl CPU<'_> {
             let (new_value, did_overflow) = self.sp.overflowing_add_signed(value);
             self.registers.f.zero = false;
             self.registers.f.subtract = false;
-            self.registers.f.carry = did_overflow;
+            self.registers.f.carry = (self.sp & 0xFF) + ((value as u16) & 0xFF) > 0xFF;
             self.registers.f.half_carry = (self.sp & 0xF) + ((value as u16) & 0xF) > 0xF;
             self.sp = new_value;
             self.pc.wrapping_add(2)
@@ -138,15 +139,15 @@ impl CPU<'_> {
       }
       Instruction::ADC(target, source) => {
         match source {
-          ArithmeticSource::A => {self.registers.a = self.add(self.registers.a.wrapping_add(if self.registers.f.carry  {1} else {0})); self.pc.wrapping_add(1)},
-          ArithmeticSource::B => {self.registers.a = self.add(self.registers.b.wrapping_add(if self.registers.f.carry  {1} else {0})); self.pc.wrapping_add(1)},
-          ArithmeticSource::C => {self.registers.a = self.add(self.registers.c.wrapping_add(if self.registers.f.carry  {1} else {0})); self.pc.wrapping_add(1)},
-          ArithmeticSource::D => {self.registers.a = self.add(self.registers.d.wrapping_add(if self.registers.f.carry  {1} else {0})); self.pc.wrapping_add(1)},
-          ArithmeticSource::E => {self.registers.a = self.add(self.registers.e.wrapping_add(if self.registers.f.carry  {1} else {0})); self.pc.wrapping_add(1)},
-          ArithmeticSource::H => {self.registers.a = self.add(self.registers.h.wrapping_add(if self.registers.f.carry  {1} else {0})); self.pc.wrapping_add(1)},
-          ArithmeticSource::L => {self.registers.a = self.add(self.registers.l.wrapping_add(if self.registers.f.carry  {1} else {0})); self.pc.wrapping_add(1)},
-          ArithmeticSource::HL => {self.registers.a = self.add(self.bus.read_byte(self.registers.get_hl()).wrapping_add(if self.registers.f.carry  {1} else {0})); self.pc.wrapping_add(1)},
-          ArithmeticSource::D8 => {self.registers.a = self.add(self.read_next_byte().wrapping_add(if self.registers.f.carry  {1} else {0})); self.pc.wrapping_add(2)},
+          ArithmeticSource::A => {self.registers.a = self.adc(self.registers.a); self.pc.wrapping_add(1)},
+          ArithmeticSource::B => {self.registers.a = self.adc(self.registers.b); self.pc.wrapping_add(1)},
+          ArithmeticSource::C => {self.registers.a = self.adc(self.registers.c); self.pc.wrapping_add(1)},
+          ArithmeticSource::D => {self.registers.a = self.adc(self.registers.d); self.pc.wrapping_add(1)},
+          ArithmeticSource::E => {self.registers.a = self.adc(self.registers.e); self.pc.wrapping_add(1)},
+          ArithmeticSource::H => {self.registers.a = self.adc(self.registers.h); self.pc.wrapping_add(1)},
+          ArithmeticSource::L => {self.registers.a = self.adc(self.registers.l); self.pc.wrapping_add(1)},
+          ArithmeticSource::HL => {self.registers.a = self.adc(self.bus.read_byte(self.registers.get_hl())); self.pc.wrapping_add(1)},
+          ArithmeticSource::D8 => {self.registers.a = self.adc(self.read_next_byte()); self.pc.wrapping_add(2)},
           _ => panic!("not a valid ADC instruction")
         }
       }
@@ -166,15 +167,15 @@ impl CPU<'_> {
       }
       Instruction::SBC(target, source) => {
         match source {
-          ArithmeticSource::A => {self.registers.a = self.subtract(self.registers.a.wrapping_sub(if self.registers.f.carry  {1} else {0})); self.pc.wrapping_add(1)},
-          ArithmeticSource::B => {self.registers.a = self.subtract(self.registers.b.wrapping_sub(if self.registers.f.carry  {1} else {0})); self.pc.wrapping_add(1)},
-          ArithmeticSource::C => {self.registers.a = self.subtract(self.registers.c.wrapping_sub(if self.registers.f.carry  {1} else {0})); self.pc.wrapping_add(1)},
-          ArithmeticSource::D => {self.registers.a = self.subtract(self.registers.d.wrapping_sub(if self.registers.f.carry  {1} else {0})); self.pc.wrapping_add(1)},
-          ArithmeticSource::E => {self.registers.a = self.subtract(self.registers.e.wrapping_sub(if self.registers.f.carry  {1} else {0})); self.pc.wrapping_add(1)},
-          ArithmeticSource::H => {self.registers.a = self.subtract(self.registers.h.wrapping_sub(if self.registers.f.carry  {1} else {0})); self.pc.wrapping_add(1)},
-          ArithmeticSource::L => {self.registers.a = self.subtract(self.registers.l.wrapping_sub(if self.registers.f.carry  {1} else {0})); self.pc.wrapping_add(1)},
-          ArithmeticSource::HL => {self.registers.a = self.subtract(self.bus.read_byte(self.registers.get_hl()).wrapping_sub(if self.registers.f.carry  {1} else {0})); self.pc.wrapping_add(1)},
-          ArithmeticSource::D8 => {self.registers.a = self.subtract(self.read_next_byte().wrapping_sub(if self.registers.f.carry  {1} else {0})); self.pc.wrapping_add(2)},
+          ArithmeticSource::A => {self.registers.a = self.subc(self.registers.a); self.pc.wrapping_add(1)},
+          ArithmeticSource::B => {self.registers.a = self.subc(self.registers.b); self.pc.wrapping_add(1)},
+          ArithmeticSource::C => {self.registers.a = self.subc(self.registers.c); self.pc.wrapping_add(1)},
+          ArithmeticSource::D => {self.registers.a = self.subc(self.registers.d); self.pc.wrapping_add(1)},
+          ArithmeticSource::E => {self.registers.a = self.subc(self.registers.e); self.pc.wrapping_add(1)},
+          ArithmeticSource::H => {self.registers.a = self.subc(self.registers.h); self.pc.wrapping_add(1)},
+          ArithmeticSource::L => {self.registers.a = self.subc(self.registers.l); self.pc.wrapping_add(1)},
+          ArithmeticSource::HL => {self.registers.a = self.subc(self.bus.read_byte(self.registers.get_hl())); self.pc.wrapping_add(1)},
+          ArithmeticSource::D8 => {self.registers.a = self.subc(self.read_next_byte()); self.pc.wrapping_add(2)},
           _ => panic!("not a valid SBC instruction")
         }
       }
@@ -353,7 +354,13 @@ impl CPU<'_> {
             let source_value = match source {
               LoadSource::D16 => self.read_next_word(),
               LoadSource::SP => self.sp,
-              LoadSource::SP8 => self.sp.wrapping_add_signed((self.read_next_byte() as i8).into()),
+              LoadSource::SP8 => {let value = (self.read_next_byte() as i8) as i16;
+                                  let new_value = self.sp.wrapping_add_signed(value);
+                                  self.registers.f.zero = false;
+                                  self.registers.f.subtract = false;
+                                  self.registers.f.carry = (self.sp & 0xFF) + ((value as u16) & 0xFF) > 0xFF;
+                                  self.registers.f.half_carry = (self.sp & 0xF) + ((value as u16) & 0xF) > 0xF;
+                                  new_value },
               LoadSource::HL => self.registers.get_hl(),
               _ => { panic!("incorrect opcode mapping for LD") }
             };
@@ -390,8 +397,8 @@ impl CPU<'_> {
               LoadTarget::DE => self.bus.write_byte(self.registers.get_de(), source_value),
               LoadTarget::HL => self.bus.write_byte(self.registers.get_hl(), source_value),
               LoadTarget::D16 => self.bus.write_byte(self.read_next_word(), source_value),
-              LoadTarget::HLI => {self.bus.write_byte(self.registers.get_hl(), source_value); self.registers.set_hl(self.registers.get_hl() + 1)},
-              LoadTarget::HLD => {self.bus.write_byte(self.registers.get_hl(), source_value); self.registers.set_hl(self.registers.get_hl() - 1)},
+              LoadTarget::HLI => {self.bus.write_byte(self.registers.get_hl(), source_value); self.registers.set_hl(self.registers.get_hl().wrapping_add(1))},
+              LoadTarget::HLD => {self.bus.write_byte(self.registers.get_hl(), source_value); self.registers.set_hl(self.registers.get_hl().wrapping_sub(1))},
               LoadTarget::AddrPC => self.bus.write_byte(0xFF00 + (self.registers.c as u16), source_value),
               _ => { panic!("incorrect opcode mapping for LD") }
             };
@@ -671,15 +678,15 @@ impl CPU<'_> {
       Instruction::DAA() => {
         let mut adjustment = 0;
         if self.registers.f.subtract {
-          if self.registers.f.half_carry {adjustment += 6;}
-          if self.registers.f.carry {adjustment += 60;}
-          self.registers.a.wrapping_add(adjustment);
+          if self.registers.f.half_carry {adjustment += 0x06;}
+          if self.registers.f.carry {adjustment += 0x60;}
+          self.registers.a = self.registers.a.wrapping_sub(adjustment);
         } else {
-          if self.registers.f.half_carry || (self.registers.a & 0xF > 9) {adjustment += 6;}
-          if self.registers.f.carry || (self.registers.a > 99) {adjustment += 60; self.registers.f.carry = true;}
-          self.registers.a.wrapping_add(adjustment);
+          if self.registers.f.half_carry || ((self.registers.a & 0x0F) > 0x09) {adjustment += 0x06;}
+          if self.registers.f.carry || (self.registers.a > 0x99) {adjustment += 0x60; self.registers.f.carry = true;}
+          self.registers.a = self.registers.a.wrapping_add(adjustment);
         }
-        if adjustment == 0 {self.registers.f.zero = true;}
+        self.registers.f.zero = self.registers.a == 0;
         self.registers.f.half_carry = false;
         self.pc.wrapping_add(1)
       }
@@ -726,7 +733,7 @@ impl CPU<'_> {
           TestTarget::L => bit_test(&mut self.registers.l, &mut self.registers.f, testbit),
           TestTarget::HL => {let mut deref = self.bus.read_byte(self.registers.get_hl()); bit_test(&mut deref, &mut self.registers.f, testbit)},
         }
-        self.pc.wrapping_add(3)
+        self.pc.wrapping_add(2)
       }
       Instruction::RES(testbit, target) => {
         fn bit_set(register: &mut u8, testbit: TestBit) {
@@ -751,7 +758,7 @@ impl CPU<'_> {
           TestTarget::L => bit_set(&mut self.registers.l, testbit),
           TestTarget::HL => {let mut deref = self.bus.read_byte(self.registers.get_hl()); bit_set(&mut deref, testbit); self.bus.write_byte(self.registers.get_hl(), deref)},
         }
-        self.pc.wrapping_add(3)
+        self.pc.wrapping_add(2)
       }
       Instruction::SET(testbit, target) => {
         fn bit_set(register: &mut u8, testbit: TestBit) {
@@ -776,7 +783,7 @@ impl CPU<'_> {
           TestTarget::L => bit_set(&mut self.registers.l, testbit),
           TestTarget::HL => {let mut deref = self.bus.read_byte(self.registers.get_hl()); bit_set(&mut deref, testbit); self.bus.write_byte(self.registers.get_hl(), deref)},
         }
-        self.pc.wrapping_add(3)
+        self.pc.wrapping_add(2)
       }
       Instruction::CALL(test, target) => {
         let jump_condition = match test {
@@ -856,6 +863,16 @@ impl CPU<'_> {
     new_value
   }
 
+  fn adc(&mut self, value: u8) -> u8 {
+    let (new_value, did_overflow) = self.registers.a.overflowing_add(value);
+    let (new_value2, did_overflow2) = new_value.overflowing_add(if self.registers.f.carry  {1} else {0});
+    self.registers.f.zero = new_value2 == 0;
+    self.registers.f.subtract = false;
+    self.registers.f.half_carry = (self.registers.a & 0xF) + (value & 0xF) + (if self.registers.f.carry  {1} else {0}) > 0xF;
+    self.registers.f.carry = (did_overflow | did_overflow2);
+    new_value2
+  }
+
   fn add16(&mut self, value: u16) -> u16 {
     let (new_value, did_overflow) = self.registers.get_hl().overflowing_add(value);
     self.registers.f.subtract = false;
@@ -871,6 +888,16 @@ impl CPU<'_> {
     self.registers.f.carry = did_overflow;
     self.registers.f.half_carry = (new_value & 0xF) + (value & 0xF) > 0xF;
     new_value
+  }
+
+  fn subc(&mut self, value: u8) -> u8 {
+    let (new_value, did_overflow) = self.registers.a.overflowing_sub(value);
+    let (new_value2, did_overflow2) = new_value.overflowing_sub(if self.registers.f.carry  {1} else {0});
+    self.registers.f.zero = new_value2 == 0;
+    self.registers.f.subtract = true;
+    self.registers.f.half_carry = !((self.registers.a & 0xF) + (!value & 0xF) + (if self.registers.f.carry  {0} else {1}) > 0xF);
+    self.registers.f.carry = (did_overflow | did_overflow2);
+    new_value2
   }
 
   fn rotate_left(register: &mut u8, flags: &mut registers::FlagsRegister, rotatecarry: bool) {
