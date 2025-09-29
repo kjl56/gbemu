@@ -6,11 +6,22 @@ use crate::cpu::registers;
 use crate::cpu::instructions::{Instruction, ArithmeticTarget, ArithmeticSource, RotateTarget, StackTarget, IncDecTarget, LoadType, LoadTarget, LoadSource, JumpTest, JumpTarget, TestBit, TestTarget};
 use crate::memory::membus;
 
+#[derive(Debug)]
+enum Interrupt {
+  VBlank,
+  LCD,
+  Timer,
+  Serial,
+  Joypad,
+}
+
 pub struct CPU<'a> {
   registers: registers::Registers,
   pc: u16,
   sp: u16,
+  queue_ime: bool,
   ime: bool,
+  queued_interrupt: Option<Interrupt>,
   pub bus: membus::MemoryBus<'a>,
   is_halted: bool,
   logfile: fs::File,
@@ -35,7 +46,9 @@ impl CPU<'_> {
         l: 0x4D,},
       pc: 0x0100,
       sp: 0xFFFE,
+      queue_ime: false,
       ime: false,
+      queued_interrupt: None,
       bus: membus::MemoryBus::new(sdlcanvas),
       is_halted: false,
       logfile: fs::File::options().write(true).create(true).open("doctorlog.txt").unwrap(),
@@ -43,7 +56,7 @@ impl CPU<'_> {
   }
 
   pub fn step(&mut self) {
-    if self.pc != 0x0 {
+    //if self.pc != 0x0 {
       let cpustate = format!(
           "A:{:02X?} F:{:02X?} B:{:02X?} C:{:02X?} D:{:02X?} E:{:02X?} H:{:02X?} L:{:02X?} SP:{:04X?} PC:{:04X?} PCMEM:{:02X?},{:02X?},{:02X?},{:02X?}",
           self.registers.a,
@@ -62,22 +75,46 @@ impl CPU<'_> {
           self.bus.read_byte(self.pc + 3)
       );
       writeln!(self.logfile, "{}", cpustate);
-      println!("{}", cpustate);
-    }
-    let mut instruction_byte = self.bus.read_byte(self.pc);
-    let prefixed = instruction_byte == 0xCB;
-    if prefixed {
-      instruction_byte = self.bus.read_byte(self.pc + 1);
-    }
-    let next_pc = if let Some(instruction) = Instruction::from_byte(instruction_byte, prefixed) {
-      self.execute(instruction)
+      //println!("{}", cpustate);
+    //}
+    if self.ime && self.interrupt_triggered() {
+      self.ime = false;
+      //five M-cycles long
+      //two wait states executed (two M-cycles, presumably done with two NOP instructs)
+      //push PC to stack (two M-cycles)
+      self.push(self.pc);
+      //set PC to address of the interrupt handler (one M-cycle)
+      println!("{:?}", self.queued_interrupt);
+      match &self.queued_interrupt {
+        VBlank => {self.pc = 0x40; self.bus.write_byte(0xFF0F, (self.bus.read_byte(0xFF0F) - 0b1))},
+        LCD => {self.pc = 0x48; self.bus.write_byte(0xFF0F, (self.bus.read_byte(0xFF0F) - 0b10))},
+        Timer => {self.pc = 0x50; self.bus.write_byte(0xFF0F, (self.bus.read_byte(0xFF0F) - 0b100))},
+        Serial => {self.pc = 0x58; self.bus.write_byte(0xFF0F, (self.bus.read_byte(0xFF0F) - 0b1000))},
+        Joypad => {self.pc = 0x60; self.bus.write_byte(0xFF0F, (self.bus.read_byte(0xFF0F) - 0b10000))},
+      };
     } else {
-      let description = format!("0x{}{:x}", if prefixed {"cb"} else {""}, instruction_byte);
-      panic!("Unknown instruction found for: {}", description);
-    };
-
-    //self.bus.gpu.frame();
-    self.pc = next_pc;
+      let mut instruction_byte = self.bus.read_byte(self.pc);
+      let prefixed = instruction_byte == 0xCB;
+      if prefixed {
+        instruction_byte = self.bus.read_byte(self.pc + 1);
+      }
+      let next_pc = if let Some(instruction) = Instruction::from_byte(instruction_byte, prefixed) {
+        if self.queue_ime {
+          let new_pc = self.execute(instruction);
+          self.ime = true;
+          self.queue_ime = false;
+          new_pc
+        } else {
+          self.execute(instruction)
+        }
+      } else {
+        let description = format!("0x{}{:x}", if prefixed {"cb"} else {""}, instruction_byte);
+        panic!("Unknown instruction found for: {}", description);
+      };
+      
+      //self.bus.gpu.frame();
+      self.pc = next_pc;
+    }
   }
 
   fn read_next_byte(&self) -> u8 {
@@ -92,11 +129,11 @@ impl CPU<'_> {
     (most_significant_byte << 8) | least_significant_byte
   }
 
-  fn execute(&mut self, instruction: Instruction) -> u16{
+  fn execute(&mut self, instruction: Instruction) -> u16 {
     if self.is_halted {
       return 0x0
     }
-    println!("{:?}", instruction);
+    //println!("{:?}", instruction);
     match instruction {
       Instruction::ADD(target, source) => {
         match target {
@@ -829,10 +866,8 @@ impl CPU<'_> {
         self.pc.wrapping_add(1)
       }
       Instruction::EI() => {
-        self.pc = self.pc.wrapping_add(1);
-        self.step();
-        self.ime = true;
-        self.pc
+        self.queue_ime = true;
+        self.pc.wrapping_add(1)
       }
       Instruction::NOP() => {
         self.pc.wrapping_add(1)
@@ -955,6 +990,31 @@ impl CPU<'_> {
       self.pop()
     } else {
       self.pc.wrapping_add(1)
+    }
+  }
+
+  fn interrupt_triggered(&mut self) -> bool {
+    let enable_flags = self.bus.read_byte(0xFFFF);
+    let interrupt_flags = self.bus.read_byte(0xFF0F);
+
+    if (enable_flags & 0b1) == 1 && (interrupt_flags & 0b1) == 1 {
+      self.queued_interrupt = Some(Interrupt::VBlank);
+      return true;
+    } else if ((enable_flags >> 1) & 0b1) == 1 && ((interrupt_flags >> 1) & 0b1) == 1 {
+      self.queued_interrupt = Some(Interrupt::LCD);
+      return true;
+    } else if ((enable_flags >> 2) & 0b1) == 1 && ((interrupt_flags >> 2) & 0b1) == 1 {
+      self.queued_interrupt = Some(Interrupt::Timer);
+      return true;
+    } else if ((enable_flags >> 3) & 0b1) == 1 && ((interrupt_flags >> 3) & 0b1) == 1 {
+      self.queued_interrupt = Some(Interrupt::Serial);
+      return true;
+    } else if ((enable_flags >> 4) & 0b1) == 1 && ((interrupt_flags >> 4) & 0b1) == 1 {
+      self.queued_interrupt = Some(Interrupt::Joypad);
+      return true;
+    } else {
+      self.queued_interrupt = None;
+      return false;
     }
   }
 }
