@@ -3,14 +3,25 @@ use std::fs;
 use std::io::Write;
 
 use crate::cpu::registers;
-use crate::cpu::instructions::{Instruction, ArithmeticTarget, ArithmeticSource, RotateTarget, StackTarget, IncDecTarget, LoadType, LoadTarget, LoadSource, JumpTest, JumpTarget};
+use crate::cpu::instructions::{Instruction, ArithmeticTarget, ArithmeticSource, RotateTarget, StackTarget, IncDecTarget, LoadType, LoadTarget, LoadSource, JumpTest, JumpTarget, TestBit, TestTarget};
 use crate::memory::membus;
+
+#[derive(Debug)]
+enum Interrupt {
+  VBlank,
+  LCD,
+  Timer,
+  Serial,
+  Joypad,
+}
 
 pub struct CPU<'a> {
   registers: registers::Registers,
   pc: u16,
   sp: u16,
+  queue_ime: bool,
   ime: bool,
+  queued_interrupt: Option<Interrupt>,
   pub bus: membus::MemoryBus<'a>,
   is_halted: bool,
   logfile: fs::File,
@@ -35,7 +46,9 @@ impl CPU<'_> {
         l: 0x4D,},
       pc: 0x0100,
       sp: 0xFFFE,
+      queue_ime: false,
       ime: false,
+      queued_interrupt: None,
       bus: membus::MemoryBus::new(sdlcanvas),
       is_halted: false,
       logfile: fs::File::options().write(true).create(true).open("doctorlog.txt").unwrap(),
@@ -43,7 +56,7 @@ impl CPU<'_> {
   }
 
   pub fn step(&mut self) {
-    if self.pc != 0x0 {
+    //if self.pc != 0x0 {
       let cpustate = format!(
           "A:{:02X?} F:{:02X?} B:{:02X?} C:{:02X?} D:{:02X?} E:{:02X?} H:{:02X?} L:{:02X?} SP:{:04X?} PC:{:04X?} PCMEM:{:02X?},{:02X?},{:02X?},{:02X?}",
           self.registers.a,
@@ -62,21 +75,46 @@ impl CPU<'_> {
           self.bus.read_byte(self.pc + 3)
       );
       writeln!(self.logfile, "{}", cpustate);
-    }
-    let mut instruction_byte = self.bus.read_byte(self.pc);
-    let prefixed = instruction_byte == 0xCB;
-    if prefixed {
-      instruction_byte = self.bus.read_byte(self.pc + 1);
-    }
-    let next_pc = if let Some(instruction) = Instruction::from_byte(instruction_byte, prefixed) {
-      self.execute(instruction)
+      //println!("{}", cpustate);
+    //}
+    if self.ime && self.interrupt_triggered() {
+      self.ime = false;
+      //five M-cycles long
+      //two wait states executed (two M-cycles, presumably done with two NOP instructs)
+      //push PC to stack (two M-cycles)
+      self.push(self.pc);
+      //set PC to address of the interrupt handler (one M-cycle)
+      println!("{:?}", self.queued_interrupt);
+      match &self.queued_interrupt {
+        VBlank => {self.pc = 0x40; self.bus.write_byte(0xFF0F, (self.bus.read_byte(0xFF0F) - 0b1))},
+        LCD => {self.pc = 0x48; self.bus.write_byte(0xFF0F, (self.bus.read_byte(0xFF0F) - 0b10))},
+        Timer => {self.pc = 0x50; self.bus.write_byte(0xFF0F, (self.bus.read_byte(0xFF0F) - 0b100))},
+        Serial => {self.pc = 0x58; self.bus.write_byte(0xFF0F, (self.bus.read_byte(0xFF0F) - 0b1000))},
+        Joypad => {self.pc = 0x60; self.bus.write_byte(0xFF0F, (self.bus.read_byte(0xFF0F) - 0b10000))},
+      };
     } else {
-      let description = format!("0x{}{:x}", if prefixed {"cb"} else {""}, instruction_byte);
-      panic!("Unknown instruction found for: {}", description);
-    };
-
-    //self.bus.gpu.frame();
-    self.pc = next_pc;
+      let mut instruction_byte = self.bus.read_byte(self.pc);
+      let prefixed = instruction_byte == 0xCB;
+      if prefixed {
+        instruction_byte = self.bus.read_byte(self.pc + 1);
+      }
+      let next_pc = if let Some(instruction) = Instruction::from_byte(instruction_byte, prefixed) {
+        if self.queue_ime {
+          let new_pc = self.execute(instruction);
+          self.ime = true;
+          self.queue_ime = false;
+          new_pc
+        } else {
+          self.execute(instruction)
+        }
+      } else {
+        let description = format!("0x{}{:x}", if prefixed {"cb"} else {""}, instruction_byte);
+        panic!("Unknown instruction found for: {}", description);
+      };
+      
+      //self.bus.gpu.frame();
+      self.pc = next_pc;
+    }
   }
 
   fn read_next_byte(&self) -> u8 {
@@ -91,7 +129,7 @@ impl CPU<'_> {
     (most_significant_byte << 8) | least_significant_byte
   }
 
-  fn execute(&mut self, instruction: Instruction) -> u16{
+  fn execute(&mut self, instruction: Instruction) -> u16 {
     if self.is_halted {
       return 0x0
     }
@@ -129,7 +167,7 @@ impl CPU<'_> {
             let (new_value, did_overflow) = self.sp.overflowing_add_signed(value);
             self.registers.f.zero = false;
             self.registers.f.subtract = false;
-            self.registers.f.carry = did_overflow;
+            self.registers.f.carry = (self.sp & 0xFF) + ((value as u16) & 0xFF) > 0xFF;
             self.registers.f.half_carry = (self.sp & 0xF) + ((value as u16) & 0xF) > 0xF;
             self.sp = new_value;
             self.pc.wrapping_add(2)
@@ -138,16 +176,16 @@ impl CPU<'_> {
       }
       Instruction::ADC(target, source) => {
         match source {
-          ArithmeticSource::A => {self.registers.a = self.add(self.registers.a + (if self.registers.f.carry  {1} else {0})); self.pc.wrapping_add(1)},
-          ArithmeticSource::B => {self.registers.a = self.add(self.registers.b + (if self.registers.f.carry  {1} else {0})); self.pc.wrapping_add(1)},
-          ArithmeticSource::C => {self.registers.a = self.add(self.registers.c + (if self.registers.f.carry  {1} else {0})); self.pc.wrapping_add(1)},
-          ArithmeticSource::D => {self.registers.a = self.add(self.registers.d + (if self.registers.f.carry  {1} else {0})); self.pc.wrapping_add(1)},
-          ArithmeticSource::E => {self.registers.a = self.add(self.registers.e + (if self.registers.f.carry  {1} else {0})); self.pc.wrapping_add(1)},
-          ArithmeticSource::H => {self.registers.a = self.add(self.registers.h + (if self.registers.f.carry  {1} else {0})); self.pc.wrapping_add(1)},
-          ArithmeticSource::L => {self.registers.a = self.add(self.registers.l + (if self.registers.f.carry  {1} else {0})); self.pc.wrapping_add(1)},
-          ArithmeticSource::HL => {self.registers.a = self.add(self.bus.read_byte(self.registers.get_hl()) + (if self.registers.f.carry  {1} else {0})); self.pc.wrapping_add(1)},
-          ArithmeticSource::D8 => {self.registers.a = self.add(self.read_next_byte() + (if self.registers.f.carry  {1} else {0})); self.pc.wrapping_add(2)},
-          _ => panic!("not a valid ADD instruction")
+          ArithmeticSource::A => {self.registers.a = self.adc(self.registers.a); self.pc.wrapping_add(1)},
+          ArithmeticSource::B => {self.registers.a = self.adc(self.registers.b); self.pc.wrapping_add(1)},
+          ArithmeticSource::C => {self.registers.a = self.adc(self.registers.c); self.pc.wrapping_add(1)},
+          ArithmeticSource::D => {self.registers.a = self.adc(self.registers.d); self.pc.wrapping_add(1)},
+          ArithmeticSource::E => {self.registers.a = self.adc(self.registers.e); self.pc.wrapping_add(1)},
+          ArithmeticSource::H => {self.registers.a = self.adc(self.registers.h); self.pc.wrapping_add(1)},
+          ArithmeticSource::L => {self.registers.a = self.adc(self.registers.l); self.pc.wrapping_add(1)},
+          ArithmeticSource::HL => {self.registers.a = self.adc(self.bus.read_byte(self.registers.get_hl())); self.pc.wrapping_add(1)},
+          ArithmeticSource::D8 => {self.registers.a = self.adc(self.read_next_byte()); self.pc.wrapping_add(2)},
+          _ => panic!("not a valid ADC instruction")
         }
       }
       Instruction::SUB(target, source) => {
@@ -162,6 +200,20 @@ impl CPU<'_> {
           ArithmeticSource::HL => {self.registers.a = self.subtract(self.bus.read_byte(self.registers.get_hl())); self.pc.wrapping_add(1)},
           ArithmeticSource::D8 => {self.registers.a = self.subtract(self.read_next_byte()); self.pc.wrapping_add(2)},
           _ => panic!("not a valid SUB instruction")
+        }
+      }
+      Instruction::SBC(target, source) => {
+        match source {
+          ArithmeticSource::A => {self.registers.a = self.subc(self.registers.a); self.pc.wrapping_add(1)},
+          ArithmeticSource::B => {self.registers.a = self.subc(self.registers.b); self.pc.wrapping_add(1)},
+          ArithmeticSource::C => {self.registers.a = self.subc(self.registers.c); self.pc.wrapping_add(1)},
+          ArithmeticSource::D => {self.registers.a = self.subc(self.registers.d); self.pc.wrapping_add(1)},
+          ArithmeticSource::E => {self.registers.a = self.subc(self.registers.e); self.pc.wrapping_add(1)},
+          ArithmeticSource::H => {self.registers.a = self.subc(self.registers.h); self.pc.wrapping_add(1)},
+          ArithmeticSource::L => {self.registers.a = self.subc(self.registers.l); self.pc.wrapping_add(1)},
+          ArithmeticSource::HL => {self.registers.a = self.subc(self.bus.read_byte(self.registers.get_hl())); self.pc.wrapping_add(1)},
+          ArithmeticSource::D8 => {self.registers.a = self.subc(self.read_next_byte()); self.pc.wrapping_add(2)},
+          _ => panic!("not a valid SBC instruction")
         }
       }
       Instruction::AND(target, source) => {
@@ -339,7 +391,13 @@ impl CPU<'_> {
             let source_value = match source {
               LoadSource::D16 => self.read_next_word(),
               LoadSource::SP => self.sp,
-              LoadSource::SP8 => self.sp.wrapping_add_signed((self.read_next_byte() as i8).into()),
+              LoadSource::SP8 => {let value = (self.read_next_byte() as i8) as i16;
+                                  let new_value = self.sp.wrapping_add_signed(value);
+                                  self.registers.f.zero = false;
+                                  self.registers.f.subtract = false;
+                                  self.registers.f.carry = (self.sp & 0xFF) + ((value as u16) & 0xFF) > 0xFF;
+                                  self.registers.f.half_carry = (self.sp & 0xF) + ((value as u16) & 0xF) > 0xF;
+                                  new_value },
               LoadSource::HL => self.registers.get_hl(),
               _ => { panic!("incorrect opcode mapping for LD") }
             };
@@ -376,8 +434,8 @@ impl CPU<'_> {
               LoadTarget::DE => self.bus.write_byte(self.registers.get_de(), source_value),
               LoadTarget::HL => self.bus.write_byte(self.registers.get_hl(), source_value),
               LoadTarget::D16 => self.bus.write_byte(self.read_next_word(), source_value),
-              LoadTarget::HLI => {self.bus.write_byte(self.registers.get_hl(), source_value); self.registers.set_hl(self.registers.get_hl() + 1)},
-              LoadTarget::HLD => {self.bus.write_byte(self.registers.get_hl(), source_value); self.registers.set_hl(self.registers.get_hl() - 1)},
+              LoadTarget::HLI => {self.bus.write_byte(self.registers.get_hl(), source_value); self.registers.set_hl(self.registers.get_hl().wrapping_add(1))},
+              LoadTarget::HLD => {self.bus.write_byte(self.registers.get_hl(), source_value); self.registers.set_hl(self.registers.get_hl().wrapping_sub(1))},
               LoadTarget::AddrPC => self.bus.write_byte(0xFF00 + (self.registers.c as u16), source_value),
               _ => { panic!("incorrect opcode mapping for LD") }
             };
@@ -498,29 +556,83 @@ impl CPU<'_> {
         }
         self.pc.wrapping_add(1)
       }
+      Instruction::RL(target) => {
+        match target {
+          RotateTarget::A => CPU::rotate_left(&mut self.registers.a, &mut self.registers.f, true),
+          RotateTarget::B => CPU::rotate_left(&mut self.registers.b, &mut self.registers.f, true),
+          RotateTarget::C => CPU::rotate_left(&mut self.registers.c, &mut self.registers.f, true),
+          RotateTarget::D => CPU::rotate_left(&mut self.registers.d, &mut self.registers.f, true),
+          RotateTarget::E => CPU::rotate_left(&mut self.registers.e, &mut self.registers.f, true),
+          RotateTarget::H => CPU::rotate_left(&mut self.registers.h, &mut self.registers.f, true),
+          RotateTarget::L => CPU::rotate_left(&mut self.registers.l, &mut self.registers.f, true),
+          RotateTarget::HL => {let mut deref = self.bus.read_byte(self.registers.get_hl()); CPU::rotate_left(&mut deref, &mut self.registers.f, true); self.bus.write_byte(self.registers.get_hl(), deref)},
+        }
+        self.pc.wrapping_add(2)
+      }
+      Instruction::RLA() => {
+        CPU::rotate_left(&mut self.registers.a, &mut self.registers.f, true);
+        self.registers.f.zero = false;
+        self.pc.wrapping_add(1)
+      }
+      Instruction::RLC(target) => {
+        match target {
+          RotateTarget::A => CPU::rotate_left(&mut self.registers.a, &mut self.registers.f, false),
+          RotateTarget::B => CPU::rotate_left(&mut self.registers.b, &mut self.registers.f, false),
+          RotateTarget::C => CPU::rotate_left(&mut self.registers.c, &mut self.registers.f, false),
+          RotateTarget::D => CPU::rotate_left(&mut self.registers.d, &mut self.registers.f, false),
+          RotateTarget::E => CPU::rotate_left(&mut self.registers.e, &mut self.registers.f, false),
+          RotateTarget::H => CPU::rotate_left(&mut self.registers.h, &mut self.registers.f, false),
+          RotateTarget::L => CPU::rotate_left(&mut self.registers.l, &mut self.registers.f, false),
+          RotateTarget::HL => {let mut deref = self.bus.read_byte(self.registers.get_hl()); CPU::rotate_left(&mut deref, &mut self.registers.f, false); self.bus.write_byte(self.registers.get_hl(), deref)},
+        }
+        self.pc.wrapping_add(2)
+      }
+      Instruction::RLCA() => {
+        CPU::rotate_left(&mut self.registers.a, &mut self.registers.f, false);
+        self.registers.f.zero = false;
+        self.pc.wrapping_add(1)
+      }
       Instruction::RR(target) => {
         match target {
-          RotateTarget::A => CPU::rotate_right(&mut self.registers.a, &mut self.registers.f),
-          RotateTarget::B => CPU::rotate_right(&mut self.registers.b, &mut self.registers.f),
-          RotateTarget::C => CPU::rotate_right(&mut self.registers.c, &mut self.registers.f),
-          RotateTarget::D => CPU::rotate_right(&mut self.registers.d, &mut self.registers.f),
-          RotateTarget::E => CPU::rotate_right(&mut self.registers.e, &mut self.registers.f),
-          RotateTarget::H => CPU::rotate_right(&mut self.registers.h, &mut self.registers.f),
-          RotateTarget::L => CPU::rotate_right(&mut self.registers.l, &mut self.registers.f),
-          RotateTarget::HL => {let mut deref = self.bus.read_byte(self.registers.get_hl()); CPU::rotate_right(&mut deref, &mut self.registers.f); self.bus.write_byte(self.registers.get_hl(), deref)},
+          RotateTarget::A => CPU::rotate_right(&mut self.registers.a, &mut self.registers.f, true),
+          RotateTarget::B => CPU::rotate_right(&mut self.registers.b, &mut self.registers.f, true),
+          RotateTarget::C => CPU::rotate_right(&mut self.registers.c, &mut self.registers.f, true),
+          RotateTarget::D => CPU::rotate_right(&mut self.registers.d, &mut self.registers.f, true),
+          RotateTarget::E => CPU::rotate_right(&mut self.registers.e, &mut self.registers.f, true),
+          RotateTarget::H => CPU::rotate_right(&mut self.registers.h, &mut self.registers.f, true),
+          RotateTarget::L => CPU::rotate_right(&mut self.registers.l, &mut self.registers.f, true),
+          RotateTarget::HL => {let mut deref = self.bus.read_byte(self.registers.get_hl()); CPU::rotate_right(&mut deref, &mut self.registers.f, true); self.bus.write_byte(self.registers.get_hl(), deref)},
         }
         self.pc.wrapping_add(2)
       }
       Instruction::RRA() => {
-        CPU::rotate_right(&mut self.registers.a, &mut self.registers.f);
+        CPU::rotate_right(&mut self.registers.a, &mut self.registers.f, true);
         self.registers.f.zero = false;
         self.pc.wrapping_add(1)
       }
-      Instruction::SRL(target) => {
+      Instruction::RRC(target) => {
+        match target {
+          RotateTarget::A => CPU::rotate_right(&mut self.registers.a, &mut self.registers.f, false),
+          RotateTarget::B => CPU::rotate_right(&mut self.registers.b, &mut self.registers.f, false),
+          RotateTarget::C => CPU::rotate_right(&mut self.registers.c, &mut self.registers.f, false),
+          RotateTarget::D => CPU::rotate_right(&mut self.registers.d, &mut self.registers.f, false),
+          RotateTarget::E => CPU::rotate_right(&mut self.registers.e, &mut self.registers.f, false),
+          RotateTarget::H => CPU::rotate_right(&mut self.registers.h, &mut self.registers.f, false),
+          RotateTarget::L => CPU::rotate_right(&mut self.registers.l, &mut self.registers.f, false),
+          RotateTarget::HL => {let mut deref = self.bus.read_byte(self.registers.get_hl()); CPU::rotate_right(&mut deref, &mut self.registers.f, false); self.bus.write_byte(self.registers.get_hl(), deref)},
+        }
+        self.pc.wrapping_add(2)
+      }
+      Instruction::RRCA() => {
+        CPU::rotate_right(&mut self.registers.a, &mut self.registers.f, false);
+        self.registers.f.zero = false;
+        self.pc.wrapping_add(1)
+      }
+      Instruction::SLA(target) => {
         fn register_shift(register: &mut u8, flags: &mut registers::FlagsRegister){
-          flags.carry = (0b1 & *register) != 0;
-          *register >>= 1;
-          flags.zero = *register == 0;
+          flags.carry = ((0b1 & (*register >> 7)) != 0);
+          *register <<= 1;
+          flags.zero = (*register == 0);
           flags.subtract = false;
           flags.half_carry = false;
         }
@@ -533,6 +645,180 @@ impl CPU<'_> {
           RotateTarget::H => register_shift(&mut self.registers.h, &mut self.registers.f),
           RotateTarget::L => register_shift(&mut self.registers.l, &mut self.registers.f),
           RotateTarget::HL => {let mut deref = self.bus.read_byte(self.registers.get_hl()); register_shift(&mut deref, &mut self.registers.f); self.bus.write_byte(self.registers.get_hl(), deref)},
+        }
+        self.pc.wrapping_add(2)
+      }
+      Instruction::SRA(target) => {
+        fn register_shift(register: &mut u8, flags: &mut registers::FlagsRegister){
+          flags.carry = ((0b1 & *register) != 0);
+          let b7 = (0b1 & (*register >> 7));
+          *register >>= 1;
+          if (b7 != 0) {*register += 0b10000000;}
+          flags.zero = (*register == 0);
+          flags.subtract = false;
+          flags.half_carry = false;
+        }
+        match target {
+          RotateTarget::A => register_shift(&mut self.registers.a, &mut self.registers.f),
+          RotateTarget::B => register_shift(&mut self.registers.b, &mut self.registers.f),
+          RotateTarget::C => register_shift(&mut self.registers.c, &mut self.registers.f),
+          RotateTarget::D => register_shift(&mut self.registers.d, &mut self.registers.f),
+          RotateTarget::E => register_shift(&mut self.registers.e, &mut self.registers.f),
+          RotateTarget::H => register_shift(&mut self.registers.h, &mut self.registers.f),
+          RotateTarget::L => register_shift(&mut self.registers.l, &mut self.registers.f),
+          RotateTarget::HL => {let mut deref = self.bus.read_byte(self.registers.get_hl()); register_shift(&mut deref, &mut self.registers.f); self.bus.write_byte(self.registers.get_hl(), deref)},
+        }
+        self.pc.wrapping_add(2)
+      }
+      Instruction::SRL(target) => {
+        fn register_shift(register: &mut u8, flags: &mut registers::FlagsRegister) {
+          flags.carry = ((0b1 & *register) != 0);
+          *register >>= 1;
+          flags.zero = (*register == 0);
+          flags.subtract = false;
+          flags.half_carry = false;
+        }
+        match target {
+          RotateTarget::A => register_shift(&mut self.registers.a, &mut self.registers.f),
+          RotateTarget::B => register_shift(&mut self.registers.b, &mut self.registers.f),
+          RotateTarget::C => register_shift(&mut self.registers.c, &mut self.registers.f),
+          RotateTarget::D => register_shift(&mut self.registers.d, &mut self.registers.f),
+          RotateTarget::E => register_shift(&mut self.registers.e, &mut self.registers.f),
+          RotateTarget::H => register_shift(&mut self.registers.h, &mut self.registers.f),
+          RotateTarget::L => register_shift(&mut self.registers.l, &mut self.registers.f),
+          RotateTarget::HL => {let mut deref = self.bus.read_byte(self.registers.get_hl()); register_shift(&mut deref, &mut self.registers.f); self.bus.write_byte(self.registers.get_hl(), deref)},
+        }
+        self.pc.wrapping_add(2)
+      }
+      Instruction::SWAP(target) => {
+        fn swap(register: &mut u8, flags: &mut registers::FlagsRegister) {
+          let mut temp = (*register & 0xF0) >> 4;
+          temp += (*register & 0x0F) << 4;
+          *register = temp;
+          flags.zero = *register == 0;
+          flags.subtract = false;
+          flags.half_carry = false;
+          flags.carry = false;
+        }
+        match target {
+          RotateTarget::A => swap(&mut self.registers.a, &mut self.registers.f),
+          RotateTarget::B => swap(&mut self.registers.b, &mut self.registers.f),
+          RotateTarget::C => swap(&mut self.registers.c, &mut self.registers.f),
+          RotateTarget::D => swap(&mut self.registers.d, &mut self.registers.f),
+          RotateTarget::E => swap(&mut self.registers.e, &mut self.registers.f),
+          RotateTarget::H => swap(&mut self.registers.h, &mut self.registers.f),
+          RotateTarget::L => swap(&mut self.registers.l, &mut self.registers.f),
+          RotateTarget::HL => {let mut deref = self.bus.read_byte(self.registers.get_hl()); swap(&mut deref, &mut self.registers.f); self.bus.write_byte(self.registers.get_hl(), deref)},
+        }
+        self.pc.wrapping_add(2)
+      }
+      Instruction::DAA() => {
+        let mut adjustment = 0;
+        if self.registers.f.subtract {
+          if self.registers.f.half_carry {adjustment += 0x06;}
+          if self.registers.f.carry {adjustment += 0x60;}
+          self.registers.a = self.registers.a.wrapping_sub(adjustment);
+        } else {
+          if self.registers.f.half_carry || ((self.registers.a & 0x0F) > 0x09) {adjustment += 0x06;}
+          if self.registers.f.carry || (self.registers.a > 0x99) {adjustment += 0x60; self.registers.f.carry = true;}
+          self.registers.a = self.registers.a.wrapping_add(adjustment);
+        }
+        self.registers.f.zero = self.registers.a == 0;
+        self.registers.f.half_carry = false;
+        self.pc.wrapping_add(1)
+      }
+      Instruction::SCF() => {
+        self.registers.f.carry = true;
+        self.registers.f.half_carry = false;
+        self.registers.f.subtract = false;
+        self.pc.wrapping_add(1)
+      }
+      Instruction::CPL() => {
+        self.registers.a = !self.registers.a;
+        self.registers.f.subtract = true;
+        self.registers.f.half_carry = true;
+        self.pc.wrapping_add(1)
+      }
+      Instruction::CCF() => {
+        self.registers.f.subtract = false;
+        self.registers.f.half_carry = false;
+        self.registers.f.carry = !self.registers.f.carry;
+        self.pc.wrapping_add(1)
+      }
+      Instruction::BIT(testbit, target) => {
+        fn bit_test(register: &mut u8, flags: &mut registers::FlagsRegister, testbit: TestBit) {
+          flags.zero = ( 0 == match testbit {
+            TestBit::Zero => 0b1 & *register,
+            TestBit::One => 0b1 & (*register >> 1),
+            TestBit::Two => 0b1 & (*register >> 2),
+            TestBit::Three => 0b1 & (*register >> 3),
+            TestBit::Four => 0b1 & (*register >> 4),
+            TestBit::Five => 0b1 & (*register >> 5),
+            TestBit::Six => 0b1 & (*register >> 6),
+            TestBit::Seven => 0b1 & (*register >> 7),
+          } );
+          flags.subtract = false;
+          flags.half_carry = true;
+        }
+        match target {
+          TestTarget::A => bit_test(&mut self.registers.a, &mut self.registers.f, testbit),
+          TestTarget::B => bit_test(&mut self.registers.b, &mut self.registers.f, testbit),
+          TestTarget::C => bit_test(&mut self.registers.c, &mut self.registers.f, testbit),
+          TestTarget::D => bit_test(&mut self.registers.d, &mut self.registers.f, testbit),
+          TestTarget::E => bit_test(&mut self.registers.e, &mut self.registers.f, testbit),
+          TestTarget::H => bit_test(&mut self.registers.h, &mut self.registers.f, testbit),
+          TestTarget::L => bit_test(&mut self.registers.l, &mut self.registers.f, testbit),
+          TestTarget::HL => {let mut deref = self.bus.read_byte(self.registers.get_hl()); bit_test(&mut deref, &mut self.registers.f, testbit)},
+        }
+        self.pc.wrapping_add(2)
+      }
+      Instruction::RES(testbit, target) => {
+        fn bit_set(register: &mut u8, testbit: TestBit) {
+          *register = match testbit {
+            TestBit::Zero => (*register & !(1 << 0)) | ((false as u8) << 0),
+            TestBit::One => (*register & !(1 << 1)) | ((false as u8) << 1),
+            TestBit::Two => (*register & !(1 << 2)) | ((false as u8) << 2),
+            TestBit::Three => (*register & !(1 << 3)) | ((false as u8) << 3),
+            TestBit::Four => (*register & !(1 << 4)) | ((false as u8) << 4),
+            TestBit::Five => (*register & !(1 << 5)) | ((false as u8) << 5),
+            TestBit::Six => (*register & !(1 << 6)) | ((false as u8) << 6),
+            TestBit::Seven => (*register & !(1 << 7)) | ((false as u8) << 7),
+          }
+        }
+        match target {
+          TestTarget::A => bit_set(&mut self.registers.a, testbit),
+          TestTarget::B => bit_set(&mut self.registers.b, testbit),
+          TestTarget::C => bit_set(&mut self.registers.c, testbit),
+          TestTarget::D => bit_set(&mut self.registers.d, testbit),
+          TestTarget::E => bit_set(&mut self.registers.e, testbit),
+          TestTarget::H => bit_set(&mut self.registers.h, testbit),
+          TestTarget::L => bit_set(&mut self.registers.l, testbit),
+          TestTarget::HL => {let mut deref = self.bus.read_byte(self.registers.get_hl()); bit_set(&mut deref, testbit); self.bus.write_byte(self.registers.get_hl(), deref)},
+        }
+        self.pc.wrapping_add(2)
+      }
+      Instruction::SET(testbit, target) => {
+        fn bit_set(register: &mut u8, testbit: TestBit) {
+          *register = match testbit {
+            TestBit::Zero => (*register & !(1 << 0)) | ((true as u8) << 0),
+            TestBit::One => (*register & !(1 << 1)) | ((true as u8) << 1),
+            TestBit::Two => (*register & !(1 << 2)) | ((true as u8) << 2),
+            TestBit::Three => (*register & !(1 << 3)) | ((true as u8) << 3),
+            TestBit::Four => (*register & !(1 << 4)) | ((true as u8) << 4),
+            TestBit::Five => (*register & !(1 << 5)) | ((true as u8) << 5),
+            TestBit::Six => (*register & !(1 << 6)) | ((true as u8) << 6),
+            TestBit::Seven => (*register & !(1 << 7)) | ((true as u8) << 7),
+          }
+        }
+        match target {
+          TestTarget::A => bit_set(&mut self.registers.a, testbit),
+          TestTarget::B => bit_set(&mut self.registers.b, testbit),
+          TestTarget::C => bit_set(&mut self.registers.c, testbit),
+          TestTarget::D => bit_set(&mut self.registers.d, testbit),
+          TestTarget::E => bit_set(&mut self.registers.e, testbit),
+          TestTarget::H => bit_set(&mut self.registers.h, testbit),
+          TestTarget::L => bit_set(&mut self.registers.l, testbit),
+          TestTarget::HL => {let mut deref = self.bus.read_byte(self.registers.get_hl()); bit_set(&mut deref, testbit); self.bus.write_byte(self.registers.get_hl(), deref)},
         }
         self.pc.wrapping_add(2)
       }
@@ -556,6 +842,21 @@ impl CPU<'_> {
         };
         self.return_(jump_condition)
       }
+      Instruction::RST(target) => {
+        let next_pc = match target {
+          JumpTarget::Addr00 => 0x00,
+          JumpTarget::Addr08 => 0x08,
+          JumpTarget::Addr10 => 0x10,
+          JumpTarget::Addr18 => 0x18,
+          JumpTarget::Addr20 => 0x20,
+          JumpTarget::Addr28 => 0x28,
+          JumpTarget::Addr30 => 0x30,
+          JumpTarget::Addr38 => 0x38,
+          _ => panic!("invalid target for RST operation")
+        };
+        self.push(self.pc.wrapping_add(1));
+        next_pc
+      }
       Instruction::RETI() => {
         self.ime = true;
         self.return_(true)
@@ -565,13 +866,17 @@ impl CPU<'_> {
         self.pc.wrapping_add(1)
       }
       Instruction::EI() => {
-        self.pc = self.pc.wrapping_add(1);
-        self.step();
-        self.ime = true;
-        self.pc
+        self.queue_ime = true;
+        self.pc.wrapping_add(1)
       }
       Instruction::NOP() => {
         self.pc.wrapping_add(1)
+      }
+      Instruction::STOP() => {
+        //intended to set cpu to very low power mode, however, not a single commercial game used this instruction to do that
+        //so, in the CGB nintendo repurposed it as a toggle for the CPU's double speed mode
+        //this instruction is very wonky and will not function as intended under certain conditions, please consult the flowchart in the pandocs
+        self.pc.wrapping_add(2)
       }
       Instruction::HALT() => {
         self.is_halted = true;
@@ -593,6 +898,16 @@ impl CPU<'_> {
     new_value
   }
 
+  fn adc(&mut self, value: u8) -> u8 {
+    let (new_value, did_overflow) = self.registers.a.overflowing_add(value);
+    let (new_value2, did_overflow2) = new_value.overflowing_add(if self.registers.f.carry  {1} else {0});
+    self.registers.f.zero = new_value2 == 0;
+    self.registers.f.subtract = false;
+    self.registers.f.half_carry = (self.registers.a & 0xF) + (value & 0xF) + (if self.registers.f.carry  {1} else {0}) > 0xF;
+    self.registers.f.carry = (did_overflow | did_overflow2);
+    new_value2
+  }
+
   fn add16(&mut self, value: u16) -> u16 {
     let (new_value, did_overflow) = self.registers.get_hl().overflowing_add(value);
     self.registers.f.subtract = false;
@@ -610,12 +925,34 @@ impl CPU<'_> {
     new_value
   }
 
-  fn rotate_right(register: &mut u8, flags: &mut registers::FlagsRegister){
-    let b7 = flags.carry;
-    flags.carry = (0b1 & *register) != 0;
-    *register >>= 1;
-    if b7 {*register += 0b10000000}
+  fn subc(&mut self, value: u8) -> u8 {
+    let (new_value, did_overflow) = self.registers.a.overflowing_sub(value);
+    let (new_value2, did_overflow2) = new_value.overflowing_sub(if self.registers.f.carry  {1} else {0});
+    self.registers.f.zero = new_value2 == 0;
+    self.registers.f.subtract = true;
+    self.registers.f.half_carry = !((self.registers.a & 0xF) + (!value & 0xF) + (if self.registers.f.carry  {0} else {1}) > 0xF);
+    self.registers.f.carry = (did_overflow | did_overflow2);
+    new_value2
+  }
+
+  fn rotate_left(register: &mut u8, flags: &mut registers::FlagsRegister, rotatecarry: bool) {
+    let b7 = (0b1 & (*register >> 7));
+    let b0 = if rotatecarry {flags.carry as u8} else {b7};
+    flags.carry = (b7 != 0);
+    *register <<= 1;
+    *register += b0;
     flags.zero = *register == 0;
+    flags.subtract = false;
+    flags.half_carry = false;
+  }
+
+  fn rotate_right(register: &mut u8, flags: &mut registers::FlagsRegister, rotatecarry: bool) {
+    let b0 = (0b1 & *register);
+    let b7 = if rotatecarry {flags.carry as u8} else {b0};
+    flags.carry = (b0 != 0);
+    *register >>= 1;
+    if (b7 != 0) {*register += 0b10000000}
+    flags.zero = (*register == 0);
     flags.subtract = false;
     flags.half_carry = false;
   }
@@ -656,8 +993,28 @@ impl CPU<'_> {
     }
   }
 
-  /*additional instructions to implement:
-    ADDHL, ADC, SUB, SBC, AND, OR, XOR, CP, INC, DEC, CCF, SCF, RRA, RLA, RRCA, 
-    RRLA, CPL, BIT, RESET, SET, SRL, RR, RL, RRC, RLC, SRA, SLA, SWAP
-  */
+  fn interrupt_triggered(&mut self) -> bool {
+    let enable_flags = self.bus.read_byte(0xFFFF);
+    let interrupt_flags = self.bus.read_byte(0xFF0F);
+
+    if (enable_flags & 0b1) == 1 && (interrupt_flags & 0b1) == 1 {
+      self.queued_interrupt = Some(Interrupt::VBlank);
+      return true;
+    } else if ((enable_flags >> 1) & 0b1) == 1 && ((interrupt_flags >> 1) & 0b1) == 1 {
+      self.queued_interrupt = Some(Interrupt::LCD);
+      return true;
+    } else if ((enable_flags >> 2) & 0b1) == 1 && ((interrupt_flags >> 2) & 0b1) == 1 {
+      self.queued_interrupt = Some(Interrupt::Timer);
+      return true;
+    } else if ((enable_flags >> 3) & 0b1) == 1 && ((interrupt_flags >> 3) & 0b1) == 1 {
+      self.queued_interrupt = Some(Interrupt::Serial);
+      return true;
+    } else if ((enable_flags >> 4) & 0b1) == 1 && ((interrupt_flags >> 4) & 0b1) == 1 {
+      self.queued_interrupt = Some(Interrupt::Joypad);
+      return true;
+    } else {
+      self.queued_interrupt = None;
+      return false;
+    }
+  }
 }
